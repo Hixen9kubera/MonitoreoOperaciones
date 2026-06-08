@@ -12,37 +12,42 @@
       <div class="brand">
         <span class="dot"></span>
         <h1>Monitoreo de Operaciones</h1>
-        <span class="sub">Publicaciones MercadoLibre · BEKURA / SANCORFASHION</span>
       </div>
+      <nav class="tabs">
+        <button class="tab active" data-view="ml">Publicador ML</button>
+        <button class="tab" data-view="amazon">Publicador Amazon</button>
+        <button class="tab" data-view="pipeline">Kubera Pipeline</button>
+      </nav>
       <div class="controls">
-        <select id="cuenta">
-          <option value="todas">Todas las cuentas</option>
-          <option value="BEKURA">BEKURA</option>
-          <option value="SANCORFASHION">SANCORFASHION</option>
-        </select>
         <button id="refresh" title="Actualizar">↻ Actualizar</button>
         <span id="updated" class="updated"></span>
       </div>
     </header>
 
-    <main>
-      <!-- Tarjetas resumen -->
-      <section class="kpis" id="kpis"></section>
+    <!-- ====================== VISTA: PUBLICADOR ML ====================== -->
+    <main id="view-ml" class="view">
+      <div class="view-controls">
+        <select id="cuenta">
+          <option value="todas">Todas las cuentas</option>
+          <option value="BEKURA">BEKURA</option>
+          <option value="SANCORFASHION">SANCORFASHION</option>
+        </select>
+      </div>
 
-      <!-- KPI 1: Publicaciones por día -->
+      <section class="kpis" id="ml-kpis"></section>
+
       <section class="card">
         <div class="card-head">
           <h2>Publicaciones por día</h2>
           <div class="seg">
-            <button data-days="7" class="seg-btn">7 días</button>
-            <button data-days="14" class="seg-btn active">14 días</button>
-            <button data-days="30" class="seg-btn">30 días</button>
+            <button data-mldays="7" class="seg-btn">7 días</button>
+            <button data-mldays="14" class="seg-btn active">14 días</button>
+            <button data-mldays="30" class="seg-btn">30 días</button>
           </div>
         </div>
-        <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+        <div class="chart-wrap"><canvas id="mlDailyChart"></canvas></div>
       </section>
 
-      <!-- KPI 4: Sincronización WooCommerce -->
       <section class="card">
         <div class="card-head">
           <h2>Sincronización con WooCommerce</h2>
@@ -55,32 +60,94 @@
         </details>
       </section>
 
-      <!-- KPI 2: Errores -->
       <section class="card">
         <div class="card-head">
           <h2>Errores de publicación y cómo corregirlos</h2>
-          <span class="sub">Agrupados por tipo · cada producto aparece una sola vez</span>
+          <span class="sub">Solo productos no publicados · cada producto aparece una vez</span>
         </div>
-        <div id="errors" class="errors">Cargando…</div>
+        <div id="ml-errors" class="errors">Cargando…</div>
       </section>
 
-      <!-- KPI 3: Tarjetas de productos -->
       <section class="card">
         <div class="card-head">
           <h2>Productos publicados</h2>
           <div class="seg">
-            <button data-status="all" class="seg-btn active">Todos</button>
-            <button data-status="ok" class="seg-btn">Éxito</button>
-            <button data-status="error" class="seg-btn">Con error</button>
-            <input id="search" type="search" placeholder="Buscar SKU…" />
+            <button data-mlstatus="all" class="seg-btn active">Todos</button>
+            <button data-mlstatus="ok" class="seg-btn">Éxito</button>
+            <button data-mlstatus="error" class="seg-btn">Con error</button>
+            <input data-mlsearch type="search" placeholder="Buscar SKU…" />
           </div>
         </div>
-        <div id="products" class="prod-grid">Cargando…</div>
+        <div id="ml-products" class="prod-grid">Cargando…</div>
+        <div id="ml-pager" class="pager"></div>
+      </section>
+    </main>
+
+    <!-- ====================== VISTA: PUBLICADOR AMAZON ====================== -->
+    <main id="view-amazon" class="view hidden">
+      <section class="kpis" id="amz-kpis"></section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Envíos a Amazon por día</h2>
+          <div class="seg">
+            <button data-amzdays="14" class="seg-btn active">14 días</button>
+            <button data-amzdays="30" class="seg-btn">30 días</button>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="amzDailyChart"></canvas></div>
+        <span class="sub">Fecha por <code>submitted_at</code> · anclado al último envío registrado</span>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Errores de Amazon y cómo corregirlos</h2>
+          <span class="sub">Atributos requeridos (severidad ERROR) · solo productos no publicados</span>
+        </div>
+        <div id="amz-errors" class="errors">Cargando…</div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Productos en Amazon</h2>
+          <div class="seg">
+            <button data-amzstatus="all" class="seg-btn active">Todos</button>
+            <button data-amzstatus="ok" class="seg-btn">Éxito</button>
+            <button data-amzstatus="error" class="seg-btn">Con error</button>
+            <input data-amzsearch type="search" placeholder="Buscar SKU…" />
+          </div>
+        </div>
+        <div id="amz-products" class="prod-grid">Cargando…</div>
+        <div id="amz-pager" class="pager"></div>
+      </section>
+    </main>
+
+    <!-- ====================== VISTA: KUBERA PIPELINE ====================== -->
+    <main id="view-pipeline" class="view hidden">
+      <section class="card">
+        <div class="card-head"><h2>Etapas del pipeline</h2></div>
+        <div id="pipe-stages" class="stages">Cargando…</div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Estado en WooCommerce</h2></div>
+        <div class="chart-wrap" style="height:280px"><canvas id="pipeStatusChart"></canvas></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Qué falta por producto</h2>
+          <div class="seg">
+            <input data-pipesearch type="search" placeholder="Buscar SKU…" />
+          </div>
+        </div>
+        <div id="pipe-products" class="prod-grid">Cargando…</div>
+        <div id="pipe-pager" class="pager"></div>
       </section>
     </main>
 
     <footer>
-      <span>Datos: <code>ml_backlog</code> · fecha por <code>created_at</code> · WooCommerce en tiempo real</span>
+      <span>Datos en vivo desde la base de datos · WooCommerce en tiempo real</span>
     </footer>
 
     <script src="app.js"></script>

@@ -75,6 +75,45 @@ const REGLAS = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Amazon: los errores vienen como JSON en la columna `issues`.
+// Cada issue: { code, message, severity, attributeNames, categories }.
+// Solo los de severidad ERROR bloquean la publicación (los WARNING Amazon los ignora).
+// ---------------------------------------------------------------------------
+export function fixAmazonPorCategoria(categorias = [], message = "") {
+  const cat = (categorias || []).join(",").toUpperCase();
+  if (cat.includes("MISSING_ATTRIBUTE")) {
+    return "Falta un atributo obligatorio. Complétalo en la ficha del producto (mapeo de atributos) y reenvía a Amazon.";
+  }
+  if (cat.includes("INVALID_ATTRIBUTE")) {
+    return "El valor del atributo no es válido para este tipo de producto. Corrige o elimina ese valor y reenvía.";
+  }
+  if (/variable_parent_deleted/i.test(message)) {
+    return "El producto padre (variable) fue eliminado. Vuelve a crear el padre antes de publicar las variaciones.";
+  }
+  return "Revisa el mensaje de Amazon y ajusta el atributo indicado antes de reenviar.";
+}
+
+// Extrae los issues ERROR de un JSON de Amazon. Devuelve [] si no parsea.
+export function parseAmazonIssues(issuesJson) {
+  if (!issuesJson) return [];
+  let arr;
+  try {
+    arr = JSON.parse(issuesJson);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((i) => (i.severity || "").toUpperCase() === "ERROR")
+    .map((i) => ({
+      code: i.code,
+      message: (i.message || "").trim(),
+      categorias: i.categories || [],
+      atributos: i.attributeNames || [],
+    }));
+}
+
 export function clasificarError(errorTexto) {
   const txt = (errorTexto || "").trim();
   if (!txt) {
