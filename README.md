@@ -41,7 +41,16 @@ DB_PASSWORD=********
 WC_URL=https://chunche.shop
 WC_CONSUMER_KEY=ck_********
 WC_CONSUMER_SECRET=cs_********
+ODOO_URL=https://ifullmx-brea.odoo.com
+ODOO_DB=ifullmx-brea-main-6396587
+ODOO_USER=jose@kubera.mx
+ODOO_PASSWORD=********
 ```
+
+> **Catálogo en vivo:** la app escanea el catálogo completo de WooCommerce
+> (`status=any`, ~40 páginas) + Odoo (XML-RPC) al arrancar y lo refresca en
+> segundo plano cada 10 min. El primer escaneo tras el deploy tarda ~1 min;
+> después el dashboard carga al instante desde el snapshot en memoria.
 
 > `PORT` lo inyecta Railway automáticamente — no hace falta definirlo.
 

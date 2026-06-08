@@ -45,6 +45,16 @@ function barChart(canvasId, data, datasets) {
   });
 }
 
+// Chip de un SKU dentro de un grupo de error. Muestra cuentas (ML) o fecha (Amazon).
+function skuChip(p) {
+  if (p.falta_en) {
+    const falta = p.falta_en.map((c) => `<span class="acc-bad">✗ ${c}</span>`).join("");
+    const pub = (p.publicada_en || []).map((c) => `<span class="acc-ok">✓ ${c}</span>`).join("");
+    return `<span class="err-sku">${p.sku} ${falta}${pub}</span>`;
+  }
+  return `<span class="err-sku">${p.sku}${p.cuenta ? ` <span class="acc">· ${p.cuenta}</span>` : ""}</span>`;
+}
+
 // Render genérico de errores agrupados (sirve para ML y Amazon).
 function renderErrores(containerId, grupos) {
   const c = $(`#${containerId}`);
@@ -64,12 +74,7 @@ function renderErrores(containerId, grupos) {
       <div class="err-body" id="${containerId}-${i}">
         <div class="fix"><b>Cómo corregirlo:</b> ${g.comoCorregir}</div>
         <div class="err-skus">
-          ${g.productos
-            .map(
-              (p) =>
-                `<span class="err-sku">${p.sku}${p.cuenta ? ` <span class="acc">· ${p.cuenta}</span>` : ""}</span>`
-            )
-            .join("")}
+          ${g.productos.map((p) => skuChip(p)).join("")}
         </div>
       </div>
     </div>`
@@ -127,19 +132,26 @@ async function mlDaily() {
     { label: "Con error", data: data.map((d) => d.err), backgroundColor: "#f85149", borderRadius: 4, stack: "s" },
   ]);
 }
-async function mlWC() {
-  $("#wcPanel").innerHTML = `<div class="loading">Consultando WooCommerce…</div>`;
+function haceCuanto(iso) {
+  if (!iso) return "";
+  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "hace " + s + "s";
+  if (s < 3600) return "hace " + Math.round(s / 60) + " min";
+  return "hace " + Math.round(s / 3600) + " h";
+}
+async function mlCatalogo() {
+  $("#wcPanel").innerHTML = `<div class="loading">Cargando catálogo…</div>`;
   try {
-    const w = await api(`/api/woocommerce`);
-    $("#wcLiveBadge").textContent = w.wc_live != null ? `WC en vivo: ${n(w.wc_live)} publicados` : "WC sin conexión";
+    const w = await api(`/api/catalogo`);
+    $("#wcLiveBadge").textContent = `Catálogo actualizado ${haceCuanto(w.ts)}`;
     $("#wcPanel").innerHTML = `
-      <div class="wc-stat"><div class="n">${n(w.wc_publish)}</div><div class="t">Productos publicados en WC</div></div>
-      <div class="wc-stat"><div class="n" style="color:var(--ok)">${n(w.ml_sincronizados)}</div><div class="t">Sincronizados en ML</div></div>
+      <div class="wc-stat"><div class="n">${n(w.meta)}</div><div class="t">Meta: fichas en WC (simples + padres)</div></div>
+      <div class="wc-stat"><div class="n" style="color:var(--ok)">${n(w.sincronizadas)}</div><div class="t">Sincronizadas en ML</div></div>
       <div class="wc-stat"><div class="n" style="color:var(--err)">${n(w.por_sincronizar)}</div><div class="t">Faltan por sincronizar</div></div>
-      <div class="wc-stat"><div class="n" style="color:var(--accent)">${w.pct_sincronizado}%</div><div class="t">Avance</div><div class="bar"><span style="width:${Math.min(w.pct_sincronizado,100)}%"></span></div></div>`;
+      <div class="wc-stat"><div class="n" style="color:var(--accent)">${w.pct_sincronizado}%</div><div class="t">Avance hacia la meta</div><div class="bar"><span style="width:${Math.min(w.pct_sincronizado,100)}%"></span></div></div>`;
     $("#wcFaltCount").textContent = n(w.por_sincronizar);
     $("#wcFaltantes").innerHTML = w.faltantes.length
-      ? w.faltantes.map((f) => `<div class="falt-item"><span class="sku">${f.sku}</span><span class="nm">${f.nombre || "—"}</span></div>`).join("")
+      ? w.faltantes.map((f) => `<div class="falt-item"><span class="sku">${f.sku}</span><span class="nm">${f.nombre || "—"} <span class="acc">· ${f.estado}/${f.tipo}</span></span></div>`).join("")
       : `<div class="loading">Todo sincronizado 🎉</div>`;
   } catch (e) {
     $("#wcPanel").innerHTML = `<div class="loading">Error: ${e.message}</div>`;
@@ -147,7 +159,29 @@ async function mlWC() {
 }
 async function mlErrores() {
   $("#ml-errors").innerHTML = `<div class="loading">Cargando errores…</div>`;
-  renderErrores("ml-errors", await api(`/api/errors?cuenta=${state.cuenta}`));
+  renderErrores("ml-errors", await api(`/api/errors`));
+}
+async function mlReady() {
+  $("#ml-ready").innerHTML = `<div class="loading">Cargando…</div>`;
+  try {
+    const r = await api(`/api/ready`);
+    $("#readySub").textContent = `${r.total_con_error} de ${r.total_ready} en "ready" tienen error de ML`;
+    if (!r.items.length) {
+      $("#ml-ready").innerHTML = `<div class="loading">Ningún SKU en ready con error 🎉</div>`;
+      return;
+    }
+    // Agrupamos por tipo de error para reutilizar el render de errores.
+    const grupos = {};
+    for (const it of r.items) {
+      (grupos[it.tipo_error] ||= { tipo: it.tipo_error, comoCorregir: it.comoCorregir, severidad: it.severidad, productos: [] });
+      const det = it.detalle[0] || {};
+      grupos[it.tipo_error].productos.push({ sku: it.sku, falta_en: det.falta_en || [], publicada_en: det.publicada_en || [] });
+    }
+    const arr = Object.values(grupos).map((g) => ({ ...g, total_productos: g.productos.length })).sort((a, b) => b.total_productos - a.total_productos);
+    renderErrores("ml-ready", arr);
+  } catch (e) {
+    $("#ml-ready").innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
 }
 async function mlProductos() {
   $("#ml-products").innerHTML = `<div class="loading">Cargando productos…</div>`;
@@ -172,7 +206,7 @@ async function mlProductos() {
   renderPager("ml-pager", d, (pg) => { state.ml.page = pg; mlProductos(); });
 }
 async function loadML() {
-  await Promise.allSettled([mlResumen(), mlDaily(), mlWC(), mlErrores(), mlProductos()]);
+  await Promise.allSettled([mlResumen(), mlDaily(), mlCatalogo(), mlErrores(), mlReady(), mlProductos()]);
 }
 
 // ===========================================================================
@@ -227,6 +261,17 @@ async function loadAmazon() {
 // ===========================================================================
 async function pipeSummary() {
   const s = await api(`/api/pipeline/summary`);
+  const cat = s.catalogo || {};
+  $("#pipe-cat").innerHTML = `
+    <div class="kpi"><div class="label">SKUs vendibles en WC</div><div class="value accent">${n(cat.skus_vendibles)}</div><div class="foot">${n(cat.simples)} simples + ${n(cat.variaciones)} variaciones</div></div>
+    <div class="kpi"><div class="label">Fichas WC</div><div class="value">${n(cat.total_fichas)}</div><div class="foot">${n(cat.padres)} padres (excluidos)</div></div>
+    <div class="kpi"><div class="label">Productos en Odoo</div><div class="value">${n(s.odoo?.totales?.templates)}</div><div class="foot">${n(s.odoo?.totales?.productos)} variantes (product.product)</div></div>`;
+
+  const r = s.odoo?.residencia || {};
+  $("#pipe-odoo").innerHTML = Object.entries(r).length
+    ? Object.entries(r).map(([k, v]) => `<div class="wc-stat"><div class="n" style="color:${k.includes('1')?'var(--ok)':k.includes('2')?'var(--blue)':'var(--muted)'}">${n(v)}</div><div class="t">${k}</div></div>`).join("")
+    : `<div class="loading">Sin datos de Odoo</div>`;
+
   $("#pipe-stages").innerHTML = s.etapas
     .map((e) => {
       const pct = e.total ? Math.round((e.ok / e.total) * 100) : 0;
@@ -346,7 +391,7 @@ bindSearch("[data-mlsearch]", (v) => { state.ml.search = v; state.ml.page = 1; m
 bindSearch("[data-amzsearch]", (v) => { state.amz.search = v; state.amz.page = 1; amzProductos(); });
 bindSearch("[data-pipesearch]", (v) => { state.pipe.search = v; state.pipe.page = 1; pipeProductos(); });
 
-// Auto-refresh del panel WooCommerce (solo si la vista ML está activa)
-setInterval(() => { if (state.view === "ml") mlWC(); }, 60000);
+// Auto-refresh del panel de catálogo (solo si la vista ML está activa)
+setInterval(() => { if (state.view === "ml") mlCatalogo(); }, 120000);
 
 loadView();

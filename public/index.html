@@ -50,12 +50,12 @@
 
       <section class="card">
         <div class="card-head">
-          <h2>Sincronización con WooCommerce</h2>
-          <span class="badge" id="wcLiveBadge">en vivo…</span>
+          <h2>Sincronización con WooCommerce → MercadoLibre</h2>
+          <span class="badge" id="wcLiveBadge">snapshot…</span>
         </div>
         <div id="wcPanel" class="wc-panel">Cargando…</div>
         <details class="faltantes">
-          <summary>Ver productos por sincronizar (<span id="wcFaltCount">0</span>)</summary>
+          <summary>Ver fichas por sincronizar (<span id="wcFaltCount">0</span>)</summary>
           <div id="wcFaltantes" class="falt-grid"></div>
         </details>
       </section>
@@ -63,9 +63,17 @@
       <section class="card">
         <div class="card-head">
           <h2>Errores de publicación y cómo corregirlos</h2>
-          <span class="sub">Solo productos no publicados · cada producto aparece una vez</span>
+          <span class="sub">Un SKU por las 2 cuentas · indica dónde falta y dónde ya está publicada</span>
         </div>
         <div id="ml-errors" class="errors">Cargando…</div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>SKUs en "ready" bloqueados por error</h2>
+          <span class="sub" id="readySub">Estado ready en WC + error de publicación en ML</span>
+        </div>
+        <div id="ml-ready" class="errors">Cargando…</div>
       </section>
 
       <section class="card">
@@ -124,6 +132,13 @@
 
     <!-- ====================== VISTA: KUBERA PIPELINE ====================== -->
     <main id="view-pipeline" class="view hidden">
+      <section class="kpis" id="pipe-cat"></section>
+
+      <section class="card">
+        <div class="card-head"><h2>Inventario en Odoo · residencia</h2><span class="sub">vía XML-RPC · productos con stock por almacén</span></div>
+        <div id="pipe-odoo" class="wc-panel">Cargando…</div>
+      </section>
+
       <section class="card">
         <div class="card-head"><h2>Etapas del pipeline</h2></div>
         <div id="pipe-stages" class="stages">Cargando…</div>

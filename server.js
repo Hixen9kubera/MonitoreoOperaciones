@@ -8,13 +8,58 @@ import {
   parseAmazonIssues,
   fixAmazonPorCategoria,
 } from "./errorMap.js";
-import { contarProductosPublicados } from "./wc.js";
+import {
+  getCatalogo,
+  getSnapshotInfo,
+  iniciarRefrescoAutomatico,
+} from "./catalogo.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.static(path.join(__dirname, "public")));
+
+const CUENTAS = ["BEKURA", "SANCORFASHION"];
+
+// Prefijo "padre" de un SKU = sus dos primeros segmentos (TEC-0001-NEG-BLN → TEC-0001).
+function prefijoPadre(sku) {
+  return (sku || "").split("-").slice(0, 2).join("-");
+}
+
+// Estado de publicación en ML por SKU y por cuenta.
+// Devuelve Map: sku -> { BEKURA:{publicada,error,ml_status,fecha}, SANCORFASHION:{...} }
+// y un Set de prefijos-padre que ya tienen alguna variación publicada con éxito.
+async function estadoMlPorSku() {
+  // ¿Alguna vez publicada con éxito? (por sku+cuenta)
+  const ok = await q(
+    `SELECT sku, cuenta, MAX(success) ever_ok FROM ml_backlog GROUP BY sku, cuenta`
+  );
+  // Último intento por sku+cuenta (para el error vigente)
+  const ult = await q(
+    `SELECT b.sku, b.cuenta, b.success, b.error, b.ml_status, b.created_at
+     FROM ml_backlog b
+     INNER JOIN (SELECT sku, cuenta, MAX(created_at) mx FROM ml_backlog GROUP BY sku, cuenta) l
+       ON l.sku=b.sku AND l.cuenta=b.cuenta AND l.mx=b.created_at`
+  );
+  const everOk = new Map();
+  for (const r of ok) everOk.set(`${r.sku}__${r.cuenta}`, Number(r.ever_ok) === 1);
+
+  const mapa = new Map();
+  const prefijosPublicados = new Set();
+  for (const r of ult) {
+    if (!mapa.has(r.sku)) mapa.set(r.sku, {});
+    const pub = everOk.get(`${r.sku}__${r.cuenta}`) || false;
+    if (pub) prefijosPublicados.add(prefijoPadre(r.sku));
+    mapa.get(r.sku)[r.cuenta] = {
+      publicada: pub,
+      error: !pub && r.success === 0 ? r.error : null,
+      ml_status: r.ml_status,
+      fecha: r.created_at,
+    };
+  }
+  return { mapa, prefijosPublicados };
+}
 
 // Helper: filtro opcional por cuenta (BEKURA / SANCORFASHION).
 function cuentaWhere(cuenta, alias = "") {
@@ -135,47 +180,41 @@ function addDaysStr(yyyymmdd, delta) {
 // --------------------------------------------------------------------------
 // KPI 2: Errores agrupados por tipo, con productos afectados y cómo corregir
 // --------------------------------------------------------------------------
-app.get("/api/errors", async (req, res) => {
+app.get("/api/errors", async (_req, res) => {
   try {
-    const f = cuentaWhere(req.query.cuenta, "b");
-    // Solo errores de productos que AÚN no se han publicado con éxito.
-    // Si ese SKU (en esa cuenta) ya tiene una publicación exitosa, su error desaparece.
-    const rows = await q(
-      `SELECT b.sku, b.cuenta, b.ml_status, b.error, b.created_at
-       FROM ml_backlog b
-       WHERE b.success=0 AND b.error IS NOT NULL AND b.error <> '' ${f.sql}
-         AND NOT EXISTS (
-           SELECT 1 FROM ml_backlog s
-           WHERE s.sku=b.sku AND s.cuenta=b.cuenta AND s.success=1
-         )
-       ORDER BY b.created_at DESC`,
-      f.params
-    );
-    // Agrupar por tipo de error. Dentro de cada tipo, un producto (sku+cuenta) solo
-    // aparece una vez (el más reciente). "El error no se repite, pero sí por producto".
+    const { mapa } = await estadoMlPorSku();
+    // Consolidamos por SKU (un solo registro para las 2 cuentas). Un SKU entra a la
+    // lista si tiene error en al menos una cuenta donde aún no está publicado.
     const grupos = new Map();
-    for (const r of rows) {
-      const cls = clasificarError(r.error);
+    for (const [sku, cuentas] of mapa.entries()) {
+      const errorEn = [];
+      const publicadaEn = [];
+      let errorTexto = null;
+      for (const c of CUENTAS) {
+        const est = cuentas[c];
+        if (!est) continue;
+        if (est.publicada) publicadaEn.push(c);
+        else if (est.error) {
+          errorEn.push(c);
+          errorTexto = est.error;
+        }
+      }
+      if (!errorEn.length) continue; // ya publicada en ambas o sin error
+      const cls = clasificarError(errorTexto);
       if (!grupos.has(cls.tipo)) {
         grupos.set(cls.tipo, {
           tipo: cls.tipo,
           comoCorregir: cls.comoCorregir,
           severidad: cls.severidad,
-          ejemplo: r.error,
-          productos: new Map(),
+          ejemplo: errorTexto,
+          productos: [],
         });
       }
-      const g = grupos.get(cls.tipo);
-      const key = `${r.sku}__${r.cuenta}`;
-      if (!g.productos.has(key)) {
-        g.productos.set(key, {
-          sku: r.sku,
-          cuenta: r.cuenta,
-          ml_status: r.ml_status,
-          created_at: r.created_at,
-          error: r.error,
-        });
-      }
+      grupos.get(cls.tipo).productos.push({
+        sku,
+        falta_en: errorEn, // cuentas donde falta por el error
+        publicada_en: publicadaEn, // cuentas donde ya está publicada
+      });
     }
     const out = [...grupos.values()]
       .map((g) => ({
@@ -183,8 +222,8 @@ app.get("/api/errors", async (req, res) => {
         comoCorregir: g.comoCorregir,
         severidad: g.severidad,
         ejemplo: g.ejemplo,
-        total_productos: g.productos.size,
-        productos: [...g.productos.values()],
+        total_productos: g.productos.length,
+        productos: g.productos.sort((a, b) => a.sku.localeCompare(b.sku)),
       }))
       .sort((a, b) => b.total_productos - a.total_productos);
     res.json(out);
@@ -262,59 +301,120 @@ app.get("/api/products", async (req, res) => {
 // --------------------------------------------------------------------------
 // KPI 4: Comparación con WooCommerce (sincronización en tiempo real)
 // --------------------------------------------------------------------------
-app.get("/api/woocommerce", async (_req, res) => {
+app.get("/api/catalogo", async (req, res) => {
   try {
-    // Catálogo en WC (status publish) según el espejo local `productos`.
-    const [cat] = await q(
-      `SELECT COUNT(*) c FROM productos WHERE status_wc='publish'`
-    );
-    // SKUs publicados con éxito en ML.
-    const [mlOk] = await q(
-      `SELECT COUNT(DISTINCT sku) c FROM ml_backlog WHERE success=1`
-    );
-    // Productos publish que aún NO tienen publicación exitosa en ML.
-    const faltantes = await q(
-      `SELECT p.sku, p.nombre, p.wc_id, p.status_wc
-       FROM productos p
-       WHERE p.status_wc='publish'
-         AND NOT EXISTS (
-            SELECT 1 FROM ml_backlog b WHERE b.sku=p.sku AND b.success=1
-         )
-       ORDER BY p.updated_at DESC
-       LIMIT 200`
-    );
-    const [faltCount] = await q(
-      `SELECT COUNT(*) c FROM productos p
-       WHERE p.status_wc='publish'
-         AND NOT EXISTS (SELECT 1 FROM ml_backlog b WHERE b.sku=p.sku AND b.success=1)`
-    );
+    const force = req.query.force === "1";
+    const cat = await getCatalogo({ force });
+    const { mapa, prefijosPublicados } = await estadoMlPorSku();
 
-    // Conteo en vivo desde la API de WooCommerce (autoritativo).
-    let wc_live = null;
-    let wc_error = null;
-    try {
-      wc_live = await contarProductosPublicados("publish");
-    } catch (e) {
-      wc_error = e.message;
+    // Una ficha cuenta como "sincronizada" si tiene publicación exitosa en ML
+    // (simple: por su SKU; padre: por cualquiera de sus variaciones, vía prefijo).
+    const fichaPublicada = (f) => {
+      if (f.type === "variable") return prefijosPublicados.has(f.sku);
+      const est = mapa.get(f.sku);
+      return !!(est && (est.BEKURA?.publicada || est.SANCORFASHION?.publicada));
+    };
+
+    const faltantes = [];
+    let sincronizadas = 0;
+    for (const f of cat.wc.fichas) {
+      if (fichaPublicada(f)) sincronizadas++;
+      else
+        faltantes.push({
+          sku: f.sku,
+          nombre: f.name,
+          tipo: f.type,
+          estado: f.status,
+        });
+    }
+    const meta = cat.wc.total_fichas; // 3,834 (decisión: medir por ficha/producto)
+    const por_sincronizar = meta - sincronizadas;
+
+    res.json({
+      ts: cat.ts,
+      meta, // total fichas (simples + padres)
+      sincronizadas,
+      por_sincronizar,
+      pct_sincronizado: meta ? Math.round((sincronizadas / meta) * 1000) / 10 : 0,
+      wc: {
+        total_fichas: cat.wc.total_fichas,
+        simples: cat.wc.simples,
+        padres: cat.wc.padres,
+        variaciones: cat.wc.variaciones,
+        skus_vendibles: cat.wc.skus_vendibles,
+        por_estado: cat.wc.por_estado,
+      },
+      odoo: cat.odoo,
+      faltantes: faltantes.slice(0, 300),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Estado del snapshot (para mostrar "actualizado hace…").
+app.get("/api/catalogo/estado", (_req, res) => res.json(getSnapshotInfo()));
+
+// --------------------------------------------------------------------------
+// SKUs en estado "ready" de WooCommerce que ADEMÁS tienen error de ML (no publican).
+// --------------------------------------------------------------------------
+app.get("/api/ready", async (_req, res) => {
+  try {
+    const cat = await getCatalogo();
+    const { mapa } = await estadoMlPorSku();
+
+    // Indexamos errores por SKU y por prefijo-padre.
+    const errPorSku = new Map();
+    const errPorPrefijo = new Map();
+    for (const [sku, cuentas] of mapa.entries()) {
+      const errorEn = [],
+        publicadaEn = [];
+      let errorTexto = null;
+      for (const c of CUENTAS) {
+        const e = cuentas[c];
+        if (!e) continue;
+        if (e.publicada) publicadaEn.push(c);
+        else if (e.error) {
+          errorEn.push(c);
+          errorTexto = e.error;
+        }
+      }
+      if (!errorEn.length) continue;
+      const info = { sku, falta_en: errorEn, publicada_en: publicadaEn, error: errorTexto };
+      errPorSku.set(sku, info);
+      const pf = prefijoPadre(sku);
+      if (!errPorPrefijo.has(pf)) errPorPrefijo.set(pf, []);
+      errPorPrefijo.get(pf).push(info);
     }
 
-    const wc_publish = Number(cat.c) || 0;
-    const ml_sincronizados = Number(mlOk.c) || 0;
-    const por_sincronizar = Number(faltCount.c) || 0;
+    const items = [];
+    for (const f of cat.wc.fichas) {
+      if (f.status !== "ready") continue;
+      let detalle = null;
+      if (f.type === "variable") {
+        const lista = errPorPrefijo.get(f.sku);
+        if (lista && lista.length) detalle = lista;
+      } else {
+        const info = errPorSku.get(f.sku);
+        if (info) detalle = [info];
+      }
+      if (!detalle) continue; // ready pero sin error de ML → no entra (cruce "ambos")
+      const cls = clasificarError(detalle[0].error);
+      items.push({
+        sku: f.sku,
+        nombre: f.name,
+        tipo: f.type,
+        tipo_error: cls.tipo,
+        comoCorregir: cls.comoCorregir,
+        severidad: cls.severidad,
+        detalle,
+      });
+    }
     res.json({
-      wc_publish,
-      wc_live,
-      wc_error,
-      ml_sincronizados,
-      por_sincronizar,
-      pct_sincronizado: wc_publish
-        ? Math.round(((wc_publish - por_sincronizar) / wc_publish) * 1000) / 10
-        : 0,
-      faltantes: faltantes.map((r) => ({
-        sku: r.sku,
-        nombre: r.nombre,
-        wc_id: r.wc_id,
-      })),
+      ts: cat.ts,
+      total_ready: cat.wc.por_estado?.ready || 0,
+      total_con_error: items.length,
+      items,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -503,9 +603,12 @@ app.get("/api/pipeline/summary", async (_req, res) => {
     const costos = await q(
       `SELECT ml_estado e, COUNT(*) c FROM costos_ml GROUP BY ml_estado`
     );
-    const statusWc = await q(
-      `SELECT status_wc e, COUNT(*) c FROM productos GROUP BY status_wc`
-    );
+    // Estados de WC y residencia/totales de Odoo desde el snapshot en vivo.
+    const cat = await getCatalogo();
+    const statusWc = Object.entries(cat.wc.por_estado).map(([estado, c]) => ({
+      estado,
+      c: Number(c),
+    }));
 
     const armarEtapa = (nombre, rows, okValores) => {
       let ok = 0,
@@ -530,9 +633,16 @@ app.get("/api/pipeline/summary", async (_req, res) => {
         armarEtapa("Atributos IA", atributos, ["ok"]),
         armarEtapa("Costos ML", costos, ["ok"]),
       ],
-      status_wc: statusWc
-        .map((r) => ({ estado: r.e || "—", c: Number(r.c) }))
-        .sort((a, b) => b.c - a.c),
+      status_wc: statusWc.sort((a, b) => b.c - a.c),
+      catalogo: {
+        ts: cat.ts,
+        total_fichas: cat.wc.total_fichas,
+        simples: cat.wc.simples,
+        padres: cat.wc.padres,
+        variaciones: cat.wc.variaciones,
+        skus_vendibles: cat.wc.skus_vendibles,
+      },
+      odoo: cat.odoo,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -603,4 +713,6 @@ app.get("*", (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Monitoreo de operaciones escuchando en puerto ${PORT}`);
+  // Primer escaneo del catálogo (WC + Odoo) y refresco cada 10 min en segundo plano.
+  iniciarRefrescoAutomatico();
 });
