@@ -1,0 +1,9 @@
+node_modules/
+.env
+npm-debug.log*
+_inspect_db.py
+_sample.py
+_sample2.py
+*.pyc
+__pycache__/
+.DS_Store

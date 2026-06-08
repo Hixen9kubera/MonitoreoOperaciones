@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Monitoreo de Operaciones · KPIs</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot"></span>
+        <h1>Monitoreo de Operaciones</h1>
+        <span class="sub">Publicaciones MercadoLibre · BEKURA / SANCORFASHION</span>
+      </div>
+      <div class="controls">
+        <select id="cuenta">
+          <option value="todas">Todas las cuentas</option>
+          <option value="BEKURA">BEKURA</option>
+          <option value="SANCORFASHION">SANCORFASHION</option>
+        </select>
+        <button id="refresh" title="Actualizar">↻ Actualizar</button>
+        <span id="updated" class="updated"></span>
+      </div>
+    </header>
+
+    <main>
+      <!-- Tarjetas resumen -->
+      <section class="kpis" id="kpis"></section>
+
+      <!-- KPI 1: Publicaciones por día -->
+      <section class="card">
+        <div class="card-head">
+          <h2>Publicaciones por día</h2>
+          <div class="seg">
+            <button data-days="7" class="seg-btn">7 días</button>
+            <button data-days="14" class="seg-btn active">14 días</button>
+            <button data-days="30" class="seg-btn">30 días</button>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="dailyChart"></canvas></div>
+      </section>
+
+      <!-- KPI 4: Sincronización WooCommerce -->
+      <section class="card">
+        <div class="card-head">
+          <h2>Sincronización con WooCommerce</h2>
+          <span class="badge" id="wcLiveBadge">en vivo…</span>
+        </div>
+        <div id="wcPanel" class="wc-panel">Cargando…</div>
+        <details class="faltantes">
+          <summary>Ver productos por sincronizar (<span id="wcFaltCount">0</span>)</summary>
+          <div id="wcFaltantes" class="falt-grid"></div>
+        </details>
+      </section>
+
+      <!-- KPI 2: Errores -->
+      <section class="card">
+        <div class="card-head">
+          <h2>Errores de publicación y cómo corregirlos</h2>
+          <span class="sub">Agrupados por tipo · cada producto aparece una sola vez</span>
+        </div>
+        <div id="errors" class="errors">Cargando…</div>
+      </section>
+
+      <!-- KPI 3: Tarjetas de productos -->
+      <section class="card">
+        <div class="card-head">
+          <h2>Productos publicados</h2>
+          <div class="seg">
+            <button data-status="all" class="seg-btn active">Todos</button>
+            <button data-status="ok" class="seg-btn">Éxito</button>
+            <button data-status="error" class="seg-btn">Con error</button>
+            <input id="search" type="search" placeholder="Buscar SKU…" />
+          </div>
+        </div>
+        <div id="products" class="prod-grid">Cargando…</div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Datos: <code>ml_backlog</code> · fecha por <code>created_at</code> · WooCommerce en tiempo real</span>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
