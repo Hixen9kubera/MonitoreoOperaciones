@@ -32,13 +32,20 @@
           <option value="BEKURA">BEKURA</option>
           <option value="SANCORFASHION">SANCORFASHION</option>
         </select>
+        <div class="export-box">
+          <span class="exp-lbl">Exportar Excel:</span>
+          <label>Desde <input type="date" id="expDesde" /></label>
+          <label>Hasta <input type="date" id="expHasta" /></label>
+          <button id="expSemana" class="seg-btn">Esta semana</button>
+          <button id="expDescargar">⬇ Descargar</button>
+        </div>
       </div>
 
       <section class="kpis" id="ml-kpis"></section>
 
       <section class="card">
         <div class="card-head">
-          <h2>Publicaciones por día</h2>
+          <h2>Publicaciones por día <span class="sub">· cada SKU se publica en BEKURA y SANCORFASHION</span></h2>
           <div class="seg">
             <button data-mldays="7" class="seg-btn">7 días</button>
             <button data-mldays="14" class="seg-btn active">14 días</button>

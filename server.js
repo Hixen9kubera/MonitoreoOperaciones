@@ -13,6 +13,7 @@ import {
   getSnapshotInfo,
   iniciarRefrescoAutomatico,
 } from "./catalogo.js";
+import { generarExcel, lunesActual } from "./export.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -99,16 +100,21 @@ app.get("/api/summary", async (req, res) => {
        FROM ml_backlog WHERE 1=1 ${f.sql} GROUP BY cuenta ORDER BY total DESC`,
       f.params
     );
-    // Semana actual (desde el lunes)
+    // Semana actual (desde el lunes) — con SKUs únicos
     const [sem] = await q(
-      `SELECT COUNT(*) total, SUM(success) ok FROM ml_backlog
+      `SELECT COUNT(*) total, SUM(success=1) ok,
+              COUNT(DISTINCT CASE WHEN success=1 THEN sku END) skus
+       FROM ml_backlog
        WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY) ${f.sql}`,
       f.params
     );
-    // Hoy
+    // Hoy — publicaciones, SKUs únicos y desglose por cuenta
     const [hoy] = await q(
-      `SELECT COUNT(*) total, SUM(success) ok FROM ml_backlog
-       WHERE DATE(created_at) = CURDATE() ${f.sql}`,
+      `SELECT COUNT(*) total, SUM(success=1) ok,
+              COUNT(DISTINCT CASE WHEN success=1 THEN sku END) skus,
+              SUM(success=1 AND cuenta='BEKURA') bekura,
+              SUM(success=1 AND cuenta='SANCORFASHION') sancor
+       FROM ml_backlog WHERE DATE(created_at) = CURDATE() ${f.sql}`,
       f.params
     );
     const total = Number(tot.total) || 0;
@@ -119,8 +125,18 @@ app.get("/api/summary", async (req, res) => {
       err: Number(tot.err) || 0,
       skus_ok: Number(tot.skus_ok) || 0,
       tasa_exito: total ? Math.round((ok / total) * 1000) / 10 : 0,
-      hoy: { total: Number(hoy.total) || 0, ok: Number(hoy.ok) || 0 },
-      semana: { total: Number(sem.total) || 0, ok: Number(sem.ok) || 0 },
+      hoy: {
+        total: Number(hoy.total) || 0,
+        ok: Number(hoy.ok) || 0,
+        skus: Number(hoy.skus) || 0,
+        bekura: Number(hoy.bekura) || 0,
+        sancor: Number(hoy.sancor) || 0,
+      },
+      semana: {
+        total: Number(sem.total) || 0,
+        ok: Number(sem.ok) || 0,
+        skus: Number(sem.skus) || 0,
+      },
       por_cuenta: porCuenta.map((r) => ({
         cuenta: r.cuenta,
         total: Number(r.total),
@@ -142,9 +158,15 @@ app.get("/api/daily", async (req, res) => {
     const f = cuentaWhere(req.query.cuenta);
     // Bucketing por día en el calendario del servidor MySQL (formato string,
     // así evitamos cualquier desfase de zona horaria al convertir a Date en JS).
+    // ok/err respetan el filtro de cuenta; bekura/sancor son el desglose por cuenta;
+    // skus = SKUs ÚNICOS publicados ese día (cada SKU se publica en las 2 cuentas,
+    // así que las publicaciones cuentan doble respecto a los SKUs únicos).
     const rows = await q(
       `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') d, COUNT(*) total,
-              SUM(success) ok, SUM(success=0) err
+              SUM(success=1) ok, SUM(success=0) err,
+              SUM(success=1 AND cuenta='BEKURA') bekura,
+              SUM(success=1 AND cuenta='SANCORFASHION') sancor,
+              COUNT(DISTINCT CASE WHEN success=1 THEN sku END) skus
        FROM ml_backlog
        WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) ${f.sql}
        GROUP BY d ORDER BY d`,
@@ -153,7 +175,14 @@ app.get("/api/daily", async (req, res) => {
     const map = new Map(
       rows.map((r) => [
         r.d,
-        { total: Number(r.total), ok: Number(r.ok), err: Number(r.err) },
+        {
+          total: Number(r.total),
+          ok: Number(r.ok),
+          err: Number(r.err),
+          bekura: Number(r.bekura),
+          sancor: Number(r.sancor),
+          skus: Number(r.skus),
+        },
       ])
     );
     // "Hoy" según el mismo servidor MySQL.
@@ -161,7 +190,7 @@ app.get("/api/daily", async (req, res) => {
     const out = [];
     for (let i = days - 1; i >= 0; i--) {
       const key = addDaysStr(now.today, -i);
-      const v = map.get(key) || { total: 0, ok: 0, err: 0 };
+      const v = map.get(key) || { total: 0, ok: 0, err: 0, bekura: 0, sancor: 0, skus: 0 };
       out.push({ fecha: key, ...v });
     }
     res.json(out);
@@ -701,6 +730,33 @@ app.get("/api/pipeline/productos", async (req, res) => {
       pages: Math.max(Math.ceil(Number(total) / PER), 1),
       items,
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --------------------------------------------------------------------------
+// Exportar a Excel: SKUs publicados (por cuenta) + resumen por día.
+// /api/export?desde=YYYY-MM-DD&hasta=YYYY-MM-DD  (desde por defecto = lunes)
+// --------------------------------------------------------------------------
+const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
+app.get("/api/export", async (req, res) => {
+  try {
+    const desde = RE_FECHA.test(req.query.desde || "")
+      ? req.query.desde
+      : await lunesActual();
+    const [{ hoy }] = await q(`SELECT DATE_FORMAT(NOW(),'%Y-%m-%d') hoy`);
+    const hasta = RE_FECHA.test(req.query.hasta || "") ? req.query.hasta : hoy;
+
+    const { wb } = await generarExcel({ desde, hasta });
+    const nombre = `publicaciones_${desde}_a_${hasta}.xlsx`;
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${nombre}"`);
+    await wb.xlsx.write(res);
+    res.end();
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

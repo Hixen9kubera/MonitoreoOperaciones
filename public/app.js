@@ -117,20 +117,59 @@ function prodCard({ cls, sku, badge, badgeCls, meta, link, fix }) {
 // ===========================================================================
 async function mlResumen() {
   const s = await api(`/api/summary?cuenta=${state.cuenta}`);
-  const cuentasTxt = s.por_cuenta.map((c) => `${c.cuenta}: ${n(c.ok)}✓`).join("  ·  ");
+  const todas = state.cuenta === "todas";
+  const splitHoy = todas ? `BEKURA ${n(s.hoy.bekura)} · SANCOR ${n(s.hoy.sancor)}` : `${n(s.hoy.ok)} publicaciones`;
   $("#ml-kpis").innerHTML = `
-    <div class="kpi"><div class="label">Publicadas hoy</div><div class="value ok">${n(s.hoy.ok)}</div><div class="foot">${n(s.hoy.total)} intentos hoy</div></div>
-    <div class="kpi"><div class="label">Esta semana</div><div class="value accent">${n(s.semana.ok)}</div><div class="foot">${n(s.semana.total)} intentos desde el lunes</div></div>
-    <div class="kpi"><div class="label">Total publicadas OK</div><div class="value ok">${n(s.ok)}</div><div class="foot">${n(s.skus_ok)} SKUs únicos</div></div>
+    <div class="kpi"><div class="label">SKUs publicados hoy</div><div class="value ok">${n(s.hoy.skus)}</div><div class="foot">${n(s.hoy.ok)} publicaciones · ${splitHoy}</div></div>
+    <div class="kpi"><div class="label">SKUs esta semana</div><div class="value accent">${n(s.semana.skus)}</div><div class="foot">${n(s.semana.ok)} publicaciones desde el lunes</div></div>
+    <div class="kpi"><div class="label">Total SKUs publicados</div><div class="value ok">${n(s.skus_ok)}</div><div class="foot">${n(s.ok)} publicaciones en total</div></div>
     <div class="kpi"><div class="label">Con error</div><div class="value err">${n(s.err)}</div><div class="foot">de ${n(s.total)} intentos</div></div>
-    <div class="kpi"><div class="label">Tasa de éxito</div><div class="value ${s.tasa_exito >= 85 ? "ok" : "err"}">${s.tasa_exito}%</div><div class="foot">${cuentasTxt}</div></div>`;
+    <div class="kpi"><div class="label">Tasa de éxito</div><div class="value ${s.tasa_exito >= 85 ? "ok" : "err"}">${s.tasa_exito}%</div><div class="foot">${todas ? "ambas cuentas" : state.cuenta}</div></div>`;
 }
 async function mlDaily() {
   const data = await api(`/api/daily?days=${state.ml.days}&cuenta=${state.cuenta}`);
-  barChart("mlDailyChart", { labels: data.map((d) => `${diaSemana(d.fecha)} ${fechaCorta(d.fecha)}`) }, [
-    { label: "Publicadas (éxito)", data: data.map((d) => d.ok), backgroundColor: "#2ea043", borderRadius: 4, stack: "s" },
-    { label: "Con error", data: data.map((d) => d.err), backgroundColor: "#f85149", borderRadius: 4, stack: "s" },
-  ]);
+  const labels = data.map((d) => `${diaSemana(d.fecha)} ${fechaCorta(d.fecha)}`);
+  const todas = state.cuenta === "todas";
+  // En "todas" mostramos el desglose por cuenta (apilado) + línea de SKUs únicos.
+  // En una cuenta específica, solo sus publicaciones.
+  const barras = todas
+    ? [
+        { label: "BEKURA", data: data.map((d) => d.bekura), backgroundColor: "#2ea043", borderRadius: 4, stack: "s" },
+        { label: "SANCORFASHION", data: data.map((d) => d.sancor), backgroundColor: "#1f6feb", borderRadius: 4, stack: "s" },
+        { label: "Con error", data: data.map((d) => d.err), backgroundColor: "#f85149", borderRadius: 4, stack: "s" },
+      ]
+    : [
+        { label: "Publicadas (éxito)", data: data.map((d) => d.ok), backgroundColor: "#2ea043", borderRadius: 4, stack: "s" },
+        { label: "Con error", data: data.map((d) => d.err), backgroundColor: "#f85149", borderRadius: 4, stack: "s" },
+      ];
+  const canvasId = "mlDailyChart";
+  if (charts[canvasId]) charts[canvasId].destroy();
+  charts[canvasId] = new Chart($(`#${canvasId}`), {
+    type: "bar",
+    data: { labels, datasets: barras },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#e6edf3" } },
+        tooltip: {
+          mode: "index",
+          intersect: false,
+          callbacks: {
+            // Muestra los SKUs únicos del día (cada SKU se publica en las 2 cuentas).
+            footer: (items) => {
+              const d = data[items[0].dataIndex];
+              return `SKUs únicos: ${n(d.skus)}  ·  ${n(d.ok)} publicaciones`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: "#8b949e", maxRotation: 60, minRotation: 45 }, grid: { color: "#21262d" } },
+        y: { stacked: true, beginAtZero: true, ticks: { color: "#8b949e" }, grid: { color: "#21262d" } },
+      },
+    },
+  });
 }
 function haceCuanto(iso) {
   if (!iso) return "";
@@ -390,6 +429,35 @@ function bindSearch(selector, apply) {
 bindSearch("[data-mlsearch]", (v) => { state.ml.search = v; state.ml.page = 1; mlProductos(); });
 bindSearch("[data-amzsearch]", (v) => { state.amz.search = v; state.amz.page = 1; amzProductos(); });
 bindSearch("[data-pipesearch]", (v) => { state.pipe.search = v; state.pipe.page = 1; pipeProductos(); });
+
+// ---- Exportar a Excel ----
+function ymdLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function lunesDeEstaSemana() {
+  const d = new Date();
+  const dow = (d.getDay() + 6) % 7; // 0 = lunes
+  d.setDate(d.getDate() - dow);
+  return ymdLocal(d);
+}
+function initExport() {
+  const hoy = ymdLocal(new Date());
+  $("#expDesde").value = lunesDeEstaSemana();
+  $("#expHasta").value = hoy;
+}
+$("#expSemana").addEventListener("click", () => {
+  $("#expDesde").value = lunesDeEstaSemana();
+  $("#expHasta").value = ymdLocal(new Date());
+});
+$("#expDescargar").addEventListener("click", () => {
+  const desde = $("#expDesde").value;
+  const hasta = $("#expHasta").value;
+  const qs = new URLSearchParams();
+  if (desde) qs.set("desde", desde);
+  if (hasta) qs.set("hasta", hasta);
+  window.location.href = `/api/export?${qs.toString()}`;
+});
+initExport();
 
 // Auto-refresh del panel de catálogo (solo si la vista ML está activa)
 setInterval(() => { if (state.view === "ml") mlCatalogo(); }, 120000);
