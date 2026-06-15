@@ -14,6 +14,12 @@ import {
   iniciarRefrescoAutomatico,
 } from "./catalogo.js";
 import { generarExcel, lunesActual } from "./export.js";
+import {
+  getInventario,
+  getInventarioInfo,
+  getDetalleOrden,
+  iniciarRefrescoInventario,
+} from "./almacen.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -762,6 +768,130 @@ app.get("/api/export", async (req, res) => {
   }
 });
 
+// ==========================================================================
+// ALMACÉN (Odoo: inventario + órdenes de compra)
+// ==========================================================================
+
+// Resumen: KPIs, clasificaciones y vistas por Texco (residencia de stock y almacén de OC).
+app.get("/api/almacen/resumen", async (req, res) => {
+  try {
+    const snap = await getInventario({ force: req.query.force === "1" });
+    const r = snap.resumen;
+    const pct = (x) => (r.total ? Math.round((x / r.total) * 1000) / 10 : 0);
+
+    // Vista por residencia de stock: clasificación de SKUs CON stock en cada Texco.
+    const porResidencia = { "Texco 1": { con_oc: 0, sin_oc: 0 }, "Texco 2": { con_oc: 0, sin_oc: 0 } };
+    // Vista por almacén de OC: SKUs ligados a OC, según el Texco de sus órdenes.
+    for (const p of snap.lista) {
+      for (const t of ["Texco 1", "Texco 2"]) {
+        const key = t === "Texco 1" ? "t1" : "t2";
+        if (p[key] > 0) (p.en_oc ? porResidencia[t].con_oc++ : porResidencia[t].sin_oc++);
+      }
+    }
+
+    // Almacén de OC: cuántos SKUs distintos hay por Texco de las órdenes.
+    const porAlmacenOC = {};
+    for (const o of snap.ordenes) {
+      porAlmacenOC[o.texco] = (porAlmacenOC[o.texco] || 0) + 1;
+    }
+
+    res.json({
+      ts: snap.ts,
+      total: r.total,
+      ligados_oc: r.ligados_oc,
+      pct_ligados: pct(r.ligados_oc),
+      cero_stock: r.cero_stock,
+      pct_cero_stock: pct(r.cero_stock),
+      clasificaciones: {
+        sin_inventario: r.sin_inventario,
+        fantasma: r.fantasmas,
+        con_stock_sin_oc: r.con_stock_sin_oc,
+        normal: r.normal,
+      },
+      residencia_stock: porResidencia,
+      texco_stock: { "Texco 1": r.texco1_stock, "Texco 2": r.texco2_stock },
+      ordenes_por_texco: porAlmacenOC,
+      total_ordenes: snap.ordenes.length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Estado del snapshot de inventario.
+app.get("/api/almacen/estado", (_req, res) => res.json(getInventarioInfo()));
+
+// Contenedores de Texco 2: pastel recibido vs faltante + faltan por recibir por contenedor.
+app.get("/api/almacen/texco2", async (_req, res) => {
+  try {
+    const snap = await getInventario();
+    res.json({ ts: snap.ts, ...snap.texco2 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Listado de SKUs filtrable por clasificación / texco / búsqueda, paginado 24.
+app.get("/api/almacen/skus", async (req, res) => {
+  try {
+    const snap = await getInventario();
+    const PER = 24;
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const clas = req.query.clas || "all"; // sin_inventario|fantasma|con_stock_sin_oc|normal|all
+    const texco = req.query.texco || "all"; // t1|t2|all
+    const search = (req.query.q || "").trim().toLowerCase();
+
+    let items = snap.lista;
+    if (clas !== "all") items = items.filter((p) => p.clas === clas);
+    if (texco === "t1") items = items.filter((p) => p.t1 > 0);
+    else if (texco === "t2") items = items.filter((p) => p.t2 > 0);
+    if (search) items = items.filter((p) => p.sku.toLowerCase().includes(search));
+
+    const total = items.length;
+    const slice = items.slice((page - 1) * PER, page * PER);
+    res.json({
+      page,
+      per_page: PER,
+      total,
+      pages: Math.max(Math.ceil(total / PER), 1),
+      items: slice,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Listado de órdenes de compra (filtrable por texco / búsqueda).
+app.get("/api/almacen/ordenes", async (req, res) => {
+  try {
+    const snap = await getInventario();
+    const texco = req.query.texco || "all";
+    const search = (req.query.q || "").trim().toLowerCase();
+    let items = snap.ordenes;
+    if (texco !== "all") items = items.filter((o) => o.texco === (texco === "t1" ? "Texco 1" : "Texco 2"));
+    if (search)
+      items = items.filter(
+        (o) =>
+          o.name.toLowerCase().includes(search) ||
+          (o.contenedor || "").toLowerCase().includes(search)
+      );
+    res.json({ total: items.length, items });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Detalle de una orden de compra.
+app.get("/api/almacen/orden/:id", async (req, res) => {
+  try {
+    const det = await getDetalleOrden(req.params.id);
+    if (!det) return res.status(404).json({ error: "Orden no encontrada" });
+    res.json(det);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // SPA fallback
 app.get("*", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
@@ -771,4 +901,6 @@ app.listen(PORT, () => {
   console.log(`Monitoreo de operaciones escuchando en puerto ${PORT}`);
   // Primer escaneo del catálogo (WC + Odoo) y refresco cada 10 min en segundo plano.
   iniciarRefrescoAutomatico();
+  // Inventario de almacén (Odoo) en segundo plano, refresco cada 15 min.
+  iniciarRefrescoInventario();
 });

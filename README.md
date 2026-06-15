@@ -9,6 +9,8 @@ Dashboard web para monitorear las publicaciones en MercadoLibre (cuentas **BEKUR
 3. **Productos publicados** — tarjetas por SKU (éxito / error), con enlace a MercadoLibre y filtro por estado, cuenta y búsqueda de SKU.
 4. **Sincronización con WooCommerce** — productos publicados en WC vs. sincronizados en ML, cuántos **faltan por sincronizar** y % de avance. Consulta la API de WooCommerce en vivo (se refresca cada 60 s).
 
+5. **Almacén (Odoo)** — inventario en vivo vía XML-RPC: % de SKUs ligados a órdenes de compra, % con 0 stock, y clasificación **SIN INVENTARIO** (0 stock + OC), **FANTASMAS** (0 stock + sin OC) y **CON STOCK SIN OC**. Lista de órdenes de compra (con contenedor) que al abrirlas muestran sus SKUs con cantidad ordenada/recibida/stock. Pastel de **contenedores Texco 2** (recibido vs faltante por recibir) y cuántos SKUs faltan por recibir en cada contenedor.
+
 ## Stack
 
 - **Node.js + Express** (un solo servicio)

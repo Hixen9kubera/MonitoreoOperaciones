@@ -17,6 +17,7 @@
         <button class="tab active" data-view="ml">Publicador ML</button>
         <button class="tab" data-view="amazon">Publicador Amazon</button>
         <button class="tab" data-view="pipeline">Kubera Pipeline</button>
+        <button class="tab" data-view="almacen">Almacén</button>
       </nav>
       <div class="controls">
         <button id="refresh" title="Actualizar">↻ Actualizar</button>
@@ -168,8 +169,75 @@
       </section>
     </main>
 
+    <!-- ====================== VISTA: ALMACÉN (Odoo) ====================== -->
+    <main id="view-almacen" class="view hidden">
+      <div id="alm-main">
+        <section class="kpis" id="alm-kpis"></section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Clasificación de SKUs</h2>
+            <span class="sub">Click en una tarjeta para filtrar la lista de abajo</span>
+          </div>
+          <div class="kpis" id="alm-clas"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head"><h2>Por almacén</h2></div>
+          <div id="alm-texco" class="wc-panel">Cargando…</div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Contenedores Texco 2 · recepción</h2>
+            <span class="sub">Objetivo a subir a WooCommerce · "faltan" = SKUs por recibir</span>
+          </div>
+          <div class="t2-layout">
+            <div class="t2-pie"><canvas id="t2Pie"></canvas></div>
+            <div id="t2-conts" class="t2-conts"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>SKUs <span class="sub" id="alm-skus-sub"></span></h2>
+            <div class="seg">
+              <select id="almTexco">
+                <option value="all">Ambos Texco</option>
+                <option value="t1">Solo Texco 1</option>
+                <option value="t2">Solo Texco 2</option>
+              </select>
+              <input data-almsearch type="search" placeholder="Buscar SKU…" />
+            </div>
+          </div>
+          <div id="alm-skus" class="prod-grid">Cargando…</div>
+          <div id="alm-skus-pager" class="pager"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Órdenes de compra</h2>
+            <div class="seg">
+              <input data-ocsearch type="search" placeholder="Buscar OC o contenedor…" />
+            </div>
+          </div>
+          <div id="alm-ordenes" class="oc-grid">Cargando…</div>
+        </section>
+      </div>
+
+      <!-- Detalle de una OC (sub-página) -->
+      <div id="alm-detalle" class="hidden">
+        <button id="ocVolver" class="pbtn">← Volver a órdenes</button>
+        <section class="card" id="oc-detalle-head"></section>
+        <section class="card">
+          <div class="card-head"><h2>SKUs de la orden</h2></div>
+          <div class="tabla-wrap"><table id="oc-tabla"></table></div>
+        </section>
+      </div>
+    </main>
+
     <footer>
-      <span>Datos en vivo desde la base de datos · WooCommerce en tiempo real</span>
+      <span>Datos en vivo desde la base de datos · WooCommerce en tiempo real · Odoo XML-RPC</span>
     </footer>
 
     <script src="app.js"></script>

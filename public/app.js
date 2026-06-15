@@ -7,6 +7,7 @@ const state = {
   ml: { days: 14, status: "all", search: "", page: 1 },
   amz: { days: 14, status: "all", search: "", page: 1 },
   pipe: { search: "", page: 1 },
+  alm: { clas: "all", texco: "all", search: "", page: 1, ocSearch: "" },
 };
 const charts = {};
 
@@ -374,6 +375,151 @@ async function loadPipeline() {
 }
 
 // ===========================================================================
+// VISTA ALMACÉN (Odoo)
+// ===========================================================================
+const CLASES = {
+  sin_inventario: { label: "SIN INVENTARIO", desc: "0 stock + en OC", color: "var(--err)" },
+  fantasma: { label: "FANTASMAS", desc: "0 stock + sin OC", color: "var(--muted)" },
+  con_stock_sin_oc: { label: "CON STOCK SIN OC", desc: "stock + sin OC", color: "var(--warn)" },
+  normal: { label: "Normal", desc: "stock + en OC", color: "var(--ok)" },
+};
+async function almResumen() {
+  const r = await api(`/api/almacen/resumen`);
+  $("#alm-kpis").innerHTML = `
+    <div class="kpi"><div class="label">SKUs en Odoo</div><div class="value">${n(r.total)}</div><div class="foot">universo con SKU · actualizado ${haceCuanto(r.ts)}</div></div>
+    <div class="kpi"><div class="label">Ligados a OC</div><div class="value accent">${r.pct_ligados}%</div><div class="foot">${n(r.ligados_oc)} SKUs</div></div>
+    <div class="kpi"><div class="label">Con 0 stock</div><div class="value err">${r.pct_cero_stock}%</div><div class="foot">${n(r.cero_stock)} SKUs</div></div>
+    <div class="kpi"><div class="label">Órdenes de compra</div><div class="value">${n(r.total_ordenes)}</div><div class="foot">no canceladas</div></div>`;
+
+  const c = r.clasificaciones;
+  $("#alm-clas").innerHTML = Object.entries(CLASES)
+    .map(([k, m]) => `
+      <div class="kpi clas-card" data-clas="${k}" title="Filtrar lista">
+        <div class="label">${m.label}</div>
+        <div class="value" style="color:${m.color}">${n(c[k])}</div>
+        <div class="foot">${m.desc}</div>
+      </div>`)
+    .join("");
+  $$(".clas-card").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.alm.clas = state.alm.clas === el.dataset.clas ? "all" : el.dataset.clas;
+      $$(".clas-card").forEach((x) => x.classList.toggle("sel", x.dataset.clas === state.alm.clas));
+      state.alm.page = 1;
+      almSkus();
+    })
+  );
+
+  const res = r.residencia_stock || {};
+  $("#alm-texco").innerHTML = `
+    <div class="wc-stat"><div class="n" style="color:var(--ok)">${n(r.texco_stock["Texco 1"])}</div><div class="t">SKUs con stock en Texco 1</div></div>
+    <div class="wc-stat"><div class="n" style="color:var(--blue)">${n(r.texco_stock["Texco 2"])}</div><div class="t">SKUs con stock en Texco 2</div></div>
+    <div class="wc-stat"><div class="n">${n((res["Texco 1"]||{}).sin_oc)}</div><div class="t">Texco 1 con stock SIN OC</div></div>
+    <div class="wc-stat"><div class="n">${n(r.ordenes_por_texco?.["Texco 1"] || 0)} / ${n(r.ordenes_por_texco?.["Texco 2"] || 0)}</div><div class="t">OC con destino Texco 1 / Texco 2</div></div>`;
+}
+
+async function almTexco2() {
+  const d = await api(`/api/almacen/texco2`);
+  // Pastel recibido vs faltante (global, contenedores con recepción).
+  if (charts.t2Pie) charts.t2Pie.destroy();
+  charts.t2Pie = new Chart($("#t2Pie"), {
+    type: "doughnut",
+    data: {
+      labels: ["Recibidos", "Faltan por recibir"],
+      datasets: [{ data: [d.pie.recibidos, d.pie.faltan], backgroundColor: ["#2ea043", "#f85149"], borderWidth: 0 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "bottom", labels: { color: "#e6edf3" } },
+        title: { display: true, text: `${d.con_recepcion} contenedores con recepción`, color: "#8b949e" } },
+    },
+  });
+  // Lista por contenedor: cuántos faltan por recibir.
+  $("#t2-conts").innerHTML = d.contenedores
+    .map((c) => {
+      const pct = c.total_skus ? Math.round((c.recibidos / c.total_skus) * 100) : 0;
+      const estado = c.con_recepcion ? "" : `<span class="t2-norec">sin recepción</span>`;
+      return `<div class="t2-cont ${c.con_recepcion ? "" : "off"}">
+        <div class="t2-cont-top"><b>Cont. ${c.cont}</b> <span class="acc">${c.orden}</span> ${estado}</div>
+        <div class="t2-cont-name">${c.contenedor}</div>
+        <div class="t2-bar"><span style="width:${pct}%"></span></div>
+        <div class="t2-cont-nums"><span class="ok">${n(c.recibidos)} recibidos</span> · <span class="er">${n(c.faltan)} faltan</span> · ${n(c.total_skus)} SKUs</div>
+      </div>`;
+    })
+    .join("");
+}
+
+async function almSkus() {
+  $("#alm-skus").innerHTML = `<div class="loading">Cargando SKUs…</div>`;
+  const d = await api(`/api/almacen/skus?clas=${state.alm.clas}&texco=${state.alm.texco}&q=${encodeURIComponent(state.alm.search)}&page=${state.alm.page}`);
+  const clasLbl = state.alm.clas === "all" ? "todos" : CLASES[state.alm.clas]?.label;
+  $("#alm-skus-sub").textContent = `· ${clasLbl} (${n(d.total)})`;
+  $("#alm-skus").innerHTML = d.items.length
+    ? d.items.map((p) => {
+        const m = CLASES[p.clas] || {};
+        return prodCard({
+          cls: p.clas === "fantasma" || p.clas === "sin_inventario" ? "err" : p.clas === "con_stock_sin_oc" ? "warn-card" : "ok",
+          sku: p.sku,
+          badge: m.label || p.clas,
+          badgeCls: p.en_oc ? "ok" : "warn",
+          meta: `Stock: ${n(p.stock)} (T1 ${n(p.t1)} · T2 ${n(p.t2)}) · ${p.en_oc ? "en OC" : "sin OC"}`,
+        });
+      }).join("")
+    : `<div class="loading">Sin resultados</div>`;
+  renderPager("alm-skus-pager", d, (pg) => { state.alm.page = pg; almSkus(); });
+}
+
+async function almOrdenes() {
+  $("#alm-ordenes").innerHTML = `<div class="loading">Cargando órdenes…</div>`;
+  const d = await api(`/api/almacen/ordenes?q=${encodeURIComponent(state.alm.ocSearch)}`);
+  $("#alm-ordenes").innerHTML = d.items.length
+    ? d.items.map((o) => `
+        <div class="oc-card" data-oc="${o.id}">
+          <div class="oc-top"><b>${o.name}</b><span class="oc-texco">${o.texco}</span></div>
+          <div class="oc-cont">${o.contenedor || "— sin contenedor —"}</div>
+          <div class="oc-meta">${n(o.num_skus)} SKUs · ${o.estado}</div>
+        </div>`).join("")
+    : `<div class="loading">Sin resultados</div>`;
+  $$(".oc-card").forEach((el) => el.addEventListener("click", () => abrirOrden(el.dataset.oc)));
+}
+
+async function abrirOrden(id) {
+  $("#alm-main").classList.add("hidden");
+  $("#alm-detalle").classList.remove("hidden");
+  $("#oc-detalle-head").innerHTML = `<div class="loading">Cargando orden…</div>`;
+  $("#oc-tabla").innerHTML = "";
+  try {
+    const o = await api(`/api/almacen/orden/${id}`);
+    $("#oc-detalle-head").innerHTML = `
+      <h2>${o.name} <span class="oc-texco">${o.texco}</span></h2>
+      <div class="oc-detalle-meta">
+        <div><span class="lbl">Contenedor</span> ${o.contenedor || "—"}</div>
+        <div><span class="lbl">Estado</span> ${o.estado}</div>
+        <div><span class="lbl">SKUs</span> ${n(o.total_skus)}</div>
+      </div>`;
+    $("#oc-tabla").innerHTML = `
+      <thead><tr><th>SKU</th><th>Producto</th><th>Ordenada</th><th>Recibida</th><th>Falta</th><th>Stock actual</th></tr></thead>
+      <tbody>${o.items.map((i) => {
+        const falta = Math.max((i.ordenada || 0) - (i.recibida || 0), 0);
+        return `<tr class="${falta > 0 ? "row-falta" : ""}">
+          <td class="sku">${i.sku}</td><td class="nm">${i.nombre || ""}</td>
+          <td>${n(i.ordenada)}</td><td>${n(i.recibida)}</td>
+          <td class="${falta > 0 ? "er" : "ok"}">${n(falta)}</td>
+          <td>${n(i.stock)}</td></tr>`;
+      }).join("")}</tbody>`;
+  } catch (e) {
+    $("#oc-detalle-head").innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
+}
+function cerrarOrden() {
+  $("#alm-detalle").classList.add("hidden");
+  $("#alm-main").classList.remove("hidden");
+}
+async function loadAlmacen() {
+  cerrarOrden();
+  await Promise.allSettled([almResumen(), almTexco2(), almSkus(), almOrdenes()]);
+}
+
+// ===========================================================================
 // Routing + eventos
 // ===========================================================================
 async function loadView(refresh = false) {
@@ -381,6 +527,7 @@ async function loadView(refresh = false) {
   if (state.view === "ml") await loadML();
   else if (state.view === "amazon") await loadAmazon();
   else if (state.view === "pipeline") await loadPipeline();
+  else if (state.view === "almacen") await loadAlmacen();
   $("#updated").textContent = "Actualizado " + new Date().toLocaleTimeString("es-MX");
 }
 
@@ -429,6 +576,10 @@ function bindSearch(selector, apply) {
 bindSearch("[data-mlsearch]", (v) => { state.ml.search = v; state.ml.page = 1; mlProductos(); });
 bindSearch("[data-amzsearch]", (v) => { state.amz.search = v; state.amz.page = 1; amzProductos(); });
 bindSearch("[data-pipesearch]", (v) => { state.pipe.search = v; state.pipe.page = 1; pipeProductos(); });
+bindSearch("[data-almsearch]", (v) => { state.alm.search = v; state.alm.page = 1; almSkus(); });
+bindSearch("[data-ocsearch]", (v) => { state.alm.ocSearch = v; almOrdenes(); });
+$("#almTexco").addEventListener("change", (e) => { state.alm.texco = e.target.value; state.alm.page = 1; almSkus(); });
+$("#ocVolver").addEventListener("click", cerrarOrden);
 
 // ---- Exportar a Excel ----
 function ymdLocal(d) {
