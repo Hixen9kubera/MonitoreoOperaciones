@@ -28,6 +28,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.static(path.join(__dirname, "public")));
 
 const CUENTAS = ["BEKURA", "SANCORFASHION"];
+const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
 // Prefijo "padre" de un SKU = sus dos primeros segmentos (TEC-0001-NEG-BLN → TEC-0001).
 function prefijoPadre(sku) {
@@ -160,13 +161,23 @@ app.get("/api/summary", async (req, res) => {
 // --------------------------------------------------------------------------
 app.get("/api/daily", async (req, res) => {
   try {
-    const days = Math.min(Math.max(Number(req.query.days) || 14, 1), 120);
     const f = cuentaWhere(req.query.cuenta);
-    // Bucketing por día en el calendario del servidor MySQL (formato string,
-    // así evitamos cualquier desfase de zona horaria al convertir a Date en JS).
-    // ok/err respetan el filtro de cuenta; bekura/sancor son el desglose por cuenta;
-    // skus = SKUs ÚNICOS publicados ese día (cada SKU se publica en las 2 cuentas,
-    // así que las publicaciones cuentan doble respecto a los SKUs únicos).
+    const [now] = await q(`SELECT DATE_FORMAT(NOW(), '%Y-%m-%d') today`);
+
+    // Rango: por días (days) o por rango explícito (desde/hasta).
+    let desde, hasta;
+    if (RE_FECHA.test(req.query.desde || "") || RE_FECHA.test(req.query.hasta || "")) {
+      hasta = RE_FECHA.test(req.query.hasta || "") ? req.query.hasta : now.today;
+      desde = RE_FECHA.test(req.query.desde || "") ? req.query.desde : addDaysStr(hasta, -13);
+    } else {
+      const days = Math.min(Math.max(Number(req.query.days) || 14, 1), 366);
+      hasta = now.today;
+      desde = addDaysStr(hasta, -(days - 1));
+    }
+    // Si el rango viene invertido, lo corregimos.
+    if (desde > hasta) [desde, hasta] = [hasta, desde];
+
+    // Conteo por día dentro del rango (inclusive).
     const rows = await q(
       `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') d, COUNT(*) total,
               SUM(success=1) ok, SUM(success=0) err,
@@ -174,9 +185,9 @@ app.get("/api/daily", async (req, res) => {
               SUM(success=1 AND cuenta='SANCORFASHION') sancor,
               COUNT(DISTINCT CASE WHEN success=1 THEN sku END) skus
        FROM ml_backlog
-       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) ${f.sql}
+       WHERE created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY) ${f.sql}
        GROUP BY d ORDER BY d`,
-      [days - 1, ...f.params]
+      [desde, hasta, ...f.params]
     );
     const map = new Map(
       rows.map((r) => [
@@ -191,15 +202,40 @@ app.get("/api/daily", async (req, res) => {
         },
       ])
     );
-    // "Hoy" según el mismo servidor MySQL.
-    const [now] = await q(`SELECT DATE_FORMAT(NOW(), '%Y-%m-%d') today`);
-    const out = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const key = addDaysStr(now.today, -i);
-      const v = map.get(key) || { total: 0, ok: 0, err: 0, bekura: 0, sancor: 0, skus: 0 };
-      out.push({ fecha: key, ...v });
+
+    // Resumen ÚNICO del rango completo (un SKU no se cuenta dos veces aunque se
+    // publique en varios días → distinto de la suma de SKUs únicos por día).
+    const [res2] = await q(
+      `SELECT COUNT(*) publicaciones,
+              COUNT(DISTINCT CASE WHEN success=1 THEN sku END) skus_unicos,
+              SUM(success=1 AND cuenta='BEKURA') bekura,
+              SUM(success=1 AND cuenta='SANCORFASHION') sancor,
+              SUM(success=0) err
+       FROM ml_backlog
+       WHERE success IS NOT NULL AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY) ${f.sql}`,
+      [desde, hasta, ...f.params]
+    );
+
+    // Relleno de días del rango.
+    const dias = [];
+    let cur = desde;
+    let guard = 0;
+    while (cur <= hasta && guard++ < 400) {
+      dias.push({ fecha: cur, ...(map.get(cur) || { total: 0, ok: 0, err: 0, bekura: 0, sancor: 0, skus: 0 }) });
+      cur = addDaysStr(cur, 1);
     }
-    res.json(out);
+    res.json({
+      desde,
+      hasta,
+      dias,
+      resumen: {
+        skus_unicos: Number(res2.skus_unicos) || 0,
+        publicaciones: Number(res2.bekura || 0) + Number(res2.sancor || 0),
+        bekura: Number(res2.bekura) || 0,
+        sancor: Number(res2.sancor) || 0,
+        err: Number(res2.err) || 0,
+      },
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -289,27 +325,35 @@ app.get("/api/products", async (req, res) => {
       searchParams.push(`%${search}%`);
     }
 
-    // Subconsulta: una fila por SKU+cuenta (la publicación más reciente).
+    // Filtro opcional por rango de fechas (refleja el filtro de días del dashboard).
+    let rangoInner = "",
+      rangoOuter = "";
+    const rangoP = [];
+    if (RE_FECHA.test(req.query.desde || "") && RE_FECHA.test(req.query.hasta || "")) {
+      rangoInner = " AND created_at >= ? AND created_at < DATE_ADD(?, INTERVAL 1 DAY) ";
+      rangoOuter = " AND b.created_at >= ? AND b.created_at < DATE_ADD(?, INTERVAL 1 DAY) ";
+      rangoP.push(req.query.desde, req.query.hasta);
+    }
+
+    // Subconsulta: una fila por SKU+cuenta (la publicación más reciente dentro del rango).
     const base = `
        FROM ml_backlog b
        INNER JOIN (
           SELECT sku, cuenta, MAX(created_at) mx
           FROM ml_backlog
-          WHERE 1=1 ${f.sql}
+          WHERE 1=1 ${f.sql} ${rangoInner}
           GROUP BY sku, cuenta
        ) last ON last.sku=b.sku AND last.cuenta=b.cuenta AND last.mx=b.created_at
-       WHERE 1=1 ${statusSql} ${searchSql} ${f.sql}`;
+       WHERE 1=1 ${statusSql} ${searchSql} ${f.sql} ${rangoOuter}`;
+    const baseParams = [...f.params, ...rangoP, ...searchParams, ...f.params, ...rangoP];
 
-    const [{ total }] = await q(
-      `SELECT COUNT(*) total ${base}`,
-      [...f.params, ...searchParams, ...f.params]
-    );
+    const [{ total }] = await q(`SELECT COUNT(*) total ${base}`, baseParams);
     const rows = await q(
       `SELECT b.sku, b.cuenta, b.ml_item_id, b.ml_url, b.success, b.error,
               b.ml_status, b.created_at ${base}
        ORDER BY b.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...f.params, ...searchParams, ...f.params, PER, (page - 1) * PER]
+      [...baseParams, PER, (page - 1) * PER]
     );
     res.json({
       page,
@@ -745,7 +789,6 @@ app.get("/api/pipeline/productos", async (req, res) => {
 // Exportar a Excel: SKUs publicados (por cuenta) + resumen por día.
 // /api/export?desde=YYYY-MM-DD&hasta=YYYY-MM-DD  (desde por defecto = lunes)
 // --------------------------------------------------------------------------
-const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 app.get("/api/export", async (req, res) => {
   try {
     const desde = RE_FECHA.test(req.query.desde || "")

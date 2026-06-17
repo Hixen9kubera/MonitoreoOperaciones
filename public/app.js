@@ -4,7 +4,7 @@
 const state = {
   view: "ml",
   cuenta: "todas",
-  ml: { days: 14, status: "all", search: "", page: 1 },
+  ml: { days: 14, status: "all", search: "", page: 1, desde: null, hasta: null },
   amz: { days: 14, status: "all", search: "", page: 1 },
   pipe: { search: "", page: 1 },
   alm: { clas: "all", texco: "all", search: "", page: 1, ocSearch: "" },
@@ -128,7 +128,17 @@ async function mlResumen() {
     <div class="kpi"><div class="label">Tasa de éxito</div><div class="value ${s.tasa_exito >= 85 ? "ok" : "err"}">${s.tasa_exito}%</div><div class="foot">${todas ? "ambas cuentas" : state.cuenta}</div></div>`;
 }
 async function mlDaily() {
-  const data = await api(`/api/daily?days=${state.ml.days}&cuenta=${state.cuenta}`);
+  // Rango: por días (botones) o personalizado (desde/hasta).
+  let qs = `cuenta=${state.cuenta}`;
+  if (state.ml.desde && state.ml.hasta) qs += `&desde=${state.ml.desde}&hasta=${state.ml.hasta}`;
+  else qs += `&days=${state.ml.days}`;
+  const resp = await api(`/api/daily?${qs}`);
+  const data = resp.dias;
+  const r = resp.resumen;
+  const fmtR = (s) => parseYMD(s).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+  $("#mlRangoResumen").innerHTML = `
+    <span class="rr-big">${n(r.skus_unicos)}</span> SKUs únicos publicados
+    <span class="rr-sub">del ${fmtR(resp.desde)} al ${fmtR(resp.hasta)} · ${n(r.publicaciones)} publicaciones (BEKURA ${n(r.bekura)} · SANCOR ${n(r.sancor)})</span>`;
   const labels = data.map((d) => `${diaSemana(d.fecha)} ${fechaCorta(d.fecha)}`);
   const todas = state.cuenta === "todas";
   // En "todas" mostramos el desglose por cuenta (apilado) + línea de SKUs únicos.
@@ -225,9 +235,9 @@ async function mlReady() {
 }
 async function mlProductos() {
   $("#ml-products").innerHTML = `<div class="loading">Cargando productos…</div>`;
-  const d = await api(
-    `/api/products?status=${state.ml.status}&cuenta=${state.cuenta}&q=${encodeURIComponent(state.ml.search)}&page=${state.ml.page}`
-  );
+  let pqs = `status=${state.ml.status}&cuenta=${state.cuenta}&q=${encodeURIComponent(state.ml.search)}&page=${state.ml.page}`;
+  if (state.ml.desde && state.ml.hasta) pqs += `&desde=${state.ml.desde}&hasta=${state.ml.hasta}`;
+  const d = await api(`/api/products?${pqs}`);
   $("#ml-products").innerHTML = d.items.length
     ? d.items
         .map((p) =>
@@ -548,8 +558,19 @@ $("#cuenta").addEventListener("change", (e) => { state.cuenta = e.target.value; 
 // Segmentos ML
 $$("[data-mldays]").forEach((b) => b.addEventListener("click", () => {
   $$("[data-mldays]").forEach((x) => x.classList.remove("active")); b.classList.add("active");
-  state.ml.days = Number(b.dataset.mldays); mlDaily();
+  state.ml.days = Number(b.dataset.mldays);
+  state.ml.desde = state.ml.hasta = null; // volver a modo "por días"
+  state.ml.page = 1;
+  mlDaily(); mlProductos();
 }));
+$("#mlAplicar").addEventListener("click", () => {
+  const desde = $("#mlDesde").value, hasta = $("#mlHasta").value;
+  if (!desde || !hasta) { alert("Elige fecha desde y hasta"); return; }
+  state.ml.desde = desde; state.ml.hasta = hasta;
+  $$("[data-mldays]").forEach((x) => x.classList.remove("active"));
+  state.ml.page = 1;
+  mlDaily(); mlProductos();
+});
 $$("[data-mlstatus]").forEach((b) => b.addEventListener("click", () => {
   $$("[data-mlstatus]").forEach((x) => x.classList.remove("active")); b.classList.add("active");
   state.ml.status = b.dataset.mlstatus; state.ml.page = 1; mlProductos();

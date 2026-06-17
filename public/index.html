@@ -51,8 +51,13 @@
             <button data-mldays="7" class="seg-btn">7 días</button>
             <button data-mldays="14" class="seg-btn active">14 días</button>
             <button data-mldays="30" class="seg-btn">30 días</button>
+            <span class="seg-sep">|</span>
+            <label class="rng">Desde <input type="date" id="mlDesde" /></label>
+            <label class="rng">Hasta <input type="date" id="mlHasta" /></label>
+            <button id="mlAplicar" class="seg-btn">Aplicar rango</button>
           </div>
         </div>
+        <div id="mlRangoResumen" class="rango-resumen"></div>
         <div class="chart-wrap"><canvas id="mlDailyChart"></canvas></div>
       </section>
 
