@@ -11,6 +11,16 @@ Dashboard web para monitorear las publicaciones en MercadoLibre (cuentas **BEKUR
 
 5. **Almacén (Odoo)** — inventario en vivo vía XML-RPC: % de SKUs ligados a órdenes de compra, % con 0 stock, y clasificación **SIN INVENTARIO** (0 stock + OC), **FANTASMAS** (0 stock + sin OC) y **CON STOCK SIN OC**. Lista de órdenes de compra (con contenedor) que al abrirlas muestran sus SKUs con cantidad ordenada/recibida/stock. Pastel de **contenedores Texco 2** (recibido vs faltante por recibir) y cuántos SKUs faltan por recibir en cada contenedor.
 
+## Pendiente / futuro
+
+- **Trazabilidad de transiciones de status del pipeline** (pending → ready → inprogress → publish).
+  Hoy la BD solo guarda el **status actual** de cada producto (`productos.status_wc`), sin historial
+  de cambios, y WooCommerce no expone ese histórico por su API. Para tenerlo se debe registrar
+  *hacia adelante*: crear una tabla `status_historial (sku, status_anterior, status_nuevo, ts)` y, en
+  cada escaneo del catálogo de WC (que ya corre cada ~10 min), comparar el status de cada SKU con el
+  anterior y registrar los cambios. Después, el Pipeline podría reportar — con filtro de fechas —
+  cuántos productos pasaron a cada status en un rango. Solo acumularía datos desde su activación.
+
 ## Stack
 
 - **Node.js + Express** (un solo servicio)
