@@ -83,3 +83,35 @@ export async function contarProductosPublicados(status = "publish") {
   const r = await wcGet(`products?status=${encodeURIComponent(status)}&per_page=1`);
   return r.total;
 }
+
+// ---------------------------------------------------------------------------
+// Aprobación en WooCommerce — plugin "WC KAM Revision Manager" (namespace wckamrm).
+// Usa autenticación de WordPress (Application Password), distinta de las llaves WC.
+// ---------------------------------------------------------------------------
+const WP_USER = process.env.WP_USER;
+const WP_PASS = (process.env.WP_APP_PASSWORD || "").replace(/\s+/g, "");
+
+function wpAuthHeader() {
+  return `Basic ${Buffer.from(`${WP_USER}:${WP_PASS}`).toString("base64")}`;
+}
+
+export async function aprobacionWoo() {
+  if (!WP_USER || !WP_PASS) throw new Error("Faltan credenciales de WordPress (WP_USER / WP_APP_PASSWORD)");
+  const res = await fetch(`${WC_URL}/wp-json/wckamrm/v1/stats`, {
+    headers: { Authorization: wpAuthHeader() },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`KAM stats HTTP ${res.status}`);
+  const d = await res.json();
+  const aprobadas = Number(d.total_approved) || 0;
+  const pendientes = Number(d.total_pending) || 0;
+  const base = aprobadas + pendientes;
+  return {
+    aprobadas,
+    pendientes,
+    asignados: Number(d.total_assigned) || 0,
+    cola: Number(d.queue_free) || 0,
+    total: Number(d.total_products) || 0,
+    pct_aprobadas: base ? Math.round((aprobadas / base) * 1000) / 10 : 0,
+  };
+}

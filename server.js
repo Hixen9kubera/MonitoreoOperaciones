@@ -13,6 +13,13 @@ import {
   getSnapshotInfo,
   iniciarRefrescoAutomatico,
 } from "./catalogo.js";
+import { aprobacionWoo } from "./wc.js";
+import { productosReady } from "./publisher.js";
+import {
+  supabaseConfigurado,
+  guardarSnapshotAprobacion,
+  leerHistorialAprobacion,
+} from "./supabase.js";
 import { generarExcel, lunesActual } from "./export.js";
 import {
   getInventario,
@@ -302,6 +309,80 @@ app.get("/api/errors", async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// --------------------------------------------------------------------------
+// Capacidad del Publisher ML.
+// Capacidad máxima = 336 (48 h × 7 publicaciones/h). "En espera" = productos en
+// status "ready" de WC MENOS los que tienen error de ML (se omiten y se guardan
+// sus SKUs). El publisher corre cada hora en punto (MX); la barra se refresca a :20.
+// --------------------------------------------------------------------------
+const PUBLISHER_CAPACIDAD = 336;
+app.get("/api/publisher/capacidad", async (_req, res) => {
+  try {
+    const ready = await productosReady(); // { total, skus }
+    const { mapa } = await estadoMlPorSku();
+    const skusError = [];
+    let completos = 0; // publicados en AMBAS cuentas → ya no esperan
+    let en_espera = 0; // incluye no intentados y parciales (solo 1 cuenta)
+    for (const sku of ready.skus) {
+      const c = mapa.get(sku);
+      const bek = !!c?.BEKURA?.publicada;
+      const san = !!c?.SANCORFASHION?.publicada;
+      const algunError = !!(c && (c.BEKURA?.error || c.SANCORFASHION?.error));
+      if (bek && san) completos++; // en ambas cuentas → completo
+      else if (!bek && !san && algunError) skusError.push(sku); // bloqueado por error
+      else en_espera++; // nunca intentado o parcial (solo 1 cuenta) → sigue en espera
+    }
+    const con_error = skusError.length;
+    res.json({
+      capacidad: PUBLISHER_CAPACIDAD,
+      ready_total: ready.total,
+      con_error,
+      completos, // publicados en ambas cuentas
+      en_espera,
+      pct: Math.round((en_espera / PUBLISHER_CAPACIDAD) * 1000) / 10,
+      skus_error: skusError,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --------------------------------------------------------------------------
+// Aprobación en WooCommerce (plugin WC KAM Revision Manager) + histórico.
+// --------------------------------------------------------------------------
+app.get("/api/aprobacion", async (_req, res) => {
+  try {
+    const m = await aprobacionWoo();
+    res.json({ ...m, historico: supabaseConfigurado() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/aprobacion/historial", async (_req, res) => {
+  try {
+    if (!supabaseConfigurado())
+      return res.json({ configurado: false, items: [] });
+    const items = (await leerHistorialAprobacion(120)) || [];
+    res.json({ configurado: true, items });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Snapshot diario de aprobación → Supabase (upsert por fecha). No-op si no está configurado.
+async function snapshotAprobacion() {
+  if (!supabaseConfigurado()) return;
+  try {
+    const m = await aprobacionWoo();
+    const [{ hoy }] = await q(`SELECT DATE_FORMAT(NOW(),'%Y-%m-%d') hoy`);
+    await guardarSnapshotAprobacion(hoy, m);
+    console.log(`Snapshot aprobación guardado (${hoy}): ${m.aprobadas} aprobadas / ${m.pendientes} pendientes`);
+  } catch (e) {
+    console.error("Snapshot aprobación falló:", e.message);
+  }
+}
 
 // --------------------------------------------------------------------------
 // KPI 3: Tarjetas de productos (éxito / error)
@@ -946,4 +1027,7 @@ app.listen(PORT, () => {
   iniciarRefrescoAutomatico();
   // Inventario de almacén (Odoo) en segundo plano, refresco cada 15 min.
   iniciarRefrescoInventario();
+  // Snapshot diario de aprobación (solo si Supabase está configurado).
+  snapshotAprobacion();
+  setInterval(snapshotAprobacion, 6 * 60 * 60 * 1000); // cada 6 h (upsert por día)
 });

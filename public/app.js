@@ -207,6 +207,61 @@ async function mlCatalogo() {
     $("#wcPanel").innerHTML = `<div class="loading">Error: ${e.message}</div>`;
   }
 }
+async function mlCapacidad() {
+  $("#pubCap").innerHTML = `<div class="loading">Consultando productos en ready…</div>`;
+  try {
+    const d = await api(`/api/publisher/capacidad`);
+    const pct = Math.min(d.pct, 100);
+    $("#pubCap").innerHTML = `
+      <div class="cap-row">
+        <span class="cap-big">${n(d.en_espera)}</span>
+        <span class="cap-de">en espera de <b>${n(d.capacidad)}</b> de capacidad</span>
+        <span class="cap-pct">${d.pct}%</span>
+      </div>
+      <div class="cap-bar"><span style="width:${pct}%"></span></div>
+      <div class="cap-meta">
+        <span>${n(d.ready_total)} en status <b>ready</b></span>
+        <span class="er">${n(d.con_error)} con error (omitidos)</span>
+        <span class="ok">${n(d.completos)} ya en ambas cuentas</span>
+        <span class="muted">capacidad = 48 h × 7 productos/h</span>
+      </div>`;
+  } catch (e) {
+    $("#pubCap").innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
+}
+async function mlAprobacion() {
+  $("#aprobPanel").innerHTML = `<div class="loading">Consultando aprobación…</div>`;
+  try {
+    const a = await api(`/api/aprobacion`);
+    $("#aprobPanel").innerHTML = `
+      <div class="wc-stat"><div class="n" style="color:var(--ok)">${n(a.aprobadas)}</div><div class="t">Aprobadas (ready)</div></div>
+      <div class="wc-stat"><div class="n" style="color:var(--warn)">${n(a.pendientes)}</div><div class="t">Pendientes por aprobar</div></div>
+      <div class="wc-stat"><div class="n" style="color:var(--accent)">${a.pct_aprobadas}%</div><div class="t">% aprobadas (sobre las 2)</div><div class="bar"><span style="width:${Math.min(a.pct_aprobadas,100)}%"></span></div></div>
+      <div class="wc-stat"><div class="n">${n(a.asignados)}</div><div class="t">Asignadas a revisión · ${n(a.cola)} en cola</div></div>`;
+    if (a.historico) cargarHistAprob();
+  } catch (e) {
+    $("#aprobPanel").innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+  }
+}
+async function cargarHistAprob() {
+  try {
+    const h = await api(`/api/aprobacion/historial`);
+    if (!h.configurado || !h.items.length) return;
+    $("#aprobHistWrap").classList.remove("hidden");
+    const labels = h.items.map((r) => fechaCorta(r.fecha));
+    if (charts.aprobHistChart) charts.aprobHistChart.destroy();
+    charts.aprobHistChart = new Chart($("#aprobHistChart"), {
+      type: "line",
+      data: { labels, datasets: [
+        { label: "Aprobadas", data: h.items.map((r) => r.aprobadas), borderColor: "#2ea043", backgroundColor: "#2ea043", tension: .3, pointRadius: 2 },
+        { label: "Pendientes", data: h.items.map((r) => r.pendientes), borderColor: "#d29922", backgroundColor: "#d29922", tension: .3, pointRadius: 2 },
+      ] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: "#e6edf3" } }, title: { display: true, text: "Aprobación en el tiempo", color: "#8b949e" } },
+        scales: { x: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" } }, y: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" }, beginAtZero: true } } },
+    });
+  } catch (e) { /* histórico opcional */ }
+}
 async function mlErrores() {
   $("#ml-errors").innerHTML = `<div class="loading">Cargando errores…</div>`;
   renderErrores("ml-errors", await api(`/api/errors`));
@@ -256,7 +311,7 @@ async function mlProductos() {
   renderPager("ml-pager", d, (pg) => { state.ml.page = pg; mlProductos(); });
 }
 async function loadML() {
-  await Promise.allSettled([mlResumen(), mlDaily(), mlCatalogo(), mlErrores(), mlReady(), mlProductos()]);
+  await Promise.allSettled([mlResumen(), mlDaily(), mlCapacidad(), mlCatalogo(), mlAprobacion(), mlErrores(), mlReady(), mlProductos()]);
 }
 
 // ===========================================================================
@@ -633,5 +688,22 @@ initExport();
 
 // Auto-refresh del panel de catálogo (solo si la vista ML está activa)
 setInterval(() => { if (state.view === "ml") mlCatalogo(); }, 120000);
+
+// Refresco de la barra de capacidad alineado a las :20 de cada hora (MX).
+// El publisher corre a la hora en punto MX; damos 20 min de margen.
+function msHastaProxima20MX() {
+  const ahoraMX = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Mexico_City" }));
+  const objetivo = new Date(ahoraMX);
+  objetivo.setMinutes(20, 0, 0);
+  if (ahoraMX.getMinutes() >= 20) objetivo.setHours(ahoraMX.getHours() + 1);
+  return Math.max(objetivo - ahoraMX, 1000);
+}
+function programarRefrescoCapacidad() {
+  setTimeout(() => {
+    if (state.view === "ml") mlCapacidad();
+    programarRefrescoCapacidad(); // reprograma para la siguiente hora
+  }, msHastaProxima20MX());
+}
+programarRefrescoCapacidad();
 
 loadView();

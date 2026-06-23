@@ -46,6 +46,14 @@
 
       <section class="card">
         <div class="card-head">
+          <h2>Capacidad del Publisher</h2>
+          <span class="sub" id="pubCapSub">máx. 336 (48 h × 7/h) · se actualiza a las :20 de cada hora (MX)</span>
+        </div>
+        <div id="pubCap"><div class="loading">Cargando…</div></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
           <h2>Publicaciones por día <span class="sub">· cada SKU se publica en BEKURA y SANCORFASHION</span></h2>
           <div class="seg">
             <button data-mldays="7" class="seg-btn">7 días</button>
@@ -71,6 +79,17 @@
           <summary>Ver fichas por sincronizar (<span id="wcFaltCount">0</span>)</summary>
           <div id="wcFaltantes" class="falt-grid"></div>
         </details>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Aprobación en Woo</h2>
+          <span class="sub" id="aprobBadge">plugin WC KAM Revision Manager · en vivo</span>
+        </div>
+        <div id="aprobPanel" class="wc-panel">Cargando…</div>
+        <div id="aprobHistWrap" class="hidden" style="margin-top:16px">
+          <div class="chart-wrap" style="height:200px"><canvas id="aprobHistChart"></canvas></div>
+        </div>
       </section>
 
       <section class="card">

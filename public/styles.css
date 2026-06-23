@@ -141,6 +141,17 @@ main { padding: 20px 24px; max-width: 1280px; margin: 0 auto; }
 .rango-resumen .rr-big { font-size: 24px; font-weight: 700; color: var(--ok); margin-right: 6px; }
 .rango-resumen .rr-sub { display: block; margin-top: 2px; }
 
+/* Barra de capacidad del publisher */
+.cap-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cap-big { font-size: 34px; font-weight: 700; color: var(--accent); }
+.cap-de { color: var(--muted); font-size: 14px; }
+.cap-pct { margin-left: auto; font-size: 22px; font-weight: 700; color: var(--text); }
+.cap-bar { height: 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 12px 0; }
+.cap-bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #f0c674); transition: width .4s; }
+.cap-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.cap-meta .er { color: var(--err); }
+.cap-meta .ok { color: var(--ok); }
+
 .badge {
   background: var(--panel-2);
   border: 1px solid var(--border);
