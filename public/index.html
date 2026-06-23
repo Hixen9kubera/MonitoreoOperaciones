@@ -71,6 +71,17 @@
 
       <section class="card">
         <div class="card-head">
+          <h2>Publicaciones por hora <span class="sub">· hora de México (el publisher corre cada hora)</span></h2>
+          <div class="seg">
+            <label class="rng">Día <input type="date" id="mlHoraDia" /></label>
+          </div>
+        </div>
+        <div id="mlHoraResumen" class="rango-resumen"></div>
+        <div class="chart-wrap" style="height:260px"><canvas id="mlHourlyChart"></canvas></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
           <h2>Sincronización con WooCommerce → MercadoLibre</h2>
           <span class="badge" id="wcLiveBadge">snapshot…</span>
         </div>

@@ -4,7 +4,7 @@
 const state = {
   view: "ml",
   cuenta: "todas",
-  ml: { days: 14, status: "all", search: "", page: 1, desde: null, hasta: null },
+  ml: { days: 14, status: "all", search: "", page: 1, desde: null, hasta: null, horaDia: null },
   amz: { days: 14, status: "all", search: "", page: 1 },
   pipe: { search: "", page: 1 },
   alm: { clas: "all", texco: "all", search: "", page: 1, ocSearch: "" },
@@ -189,6 +189,43 @@ function haceCuanto(iso) {
   if (s < 3600) return "hace " + Math.round(s / 60) + " min";
   return "hace " + Math.round(s / 3600) + " h";
 }
+async function mlHourly() {
+  let qs = `cuenta=${state.cuenta}`;
+  if (state.ml.horaDia) qs += `&dia=${state.ml.horaDia}`;
+  const resp = await api(`/api/hourly?${qs}`);
+  if (!state.ml.horaDia) $("#mlHoraDia").value = resp.dia; // refleja el día por defecto
+  const r = resp.resumen;
+  $("#mlHoraResumen").innerHTML = `
+    <span class="rr-big">${n(r.skus_unicos)}</span> SKUs únicos
+    <span class="rr-sub">${n(r.publicaciones)} publicaciones en ${n(r.horas_activas)} horas · promedio ${r.promedio_hora}/hora activa</span>`;
+  const labels = resp.horas.map((h) => String(h.hora).padStart(2, "0") + ":00");
+  const canvasId = "mlHourlyChart";
+  if (charts[canvasId]) charts[canvasId].destroy();
+  charts[canvasId] = new Chart($(`#${canvasId}`), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "BEKURA", data: resp.horas.map((h) => h.bekura), backgroundColor: "#2ea043", borderRadius: 3, stack: "s" },
+        { label: "SANCORFASHION", data: resp.horas.map((h) => h.sancor), backgroundColor: "#1f6feb", borderRadius: 3, stack: "s" },
+        { label: "Con error", data: resp.horas.map((h) => h.err), backgroundColor: "#f85149", borderRadius: 3, stack: "s" },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#e6edf3" } },
+        tooltip: { mode: "index", intersect: false, callbacks: {
+          footer: (items) => `SKUs únicos: ${n(resp.horas[items[0].dataIndex].skus)}`,
+        } },
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: "#8b949e" }, grid: { color: "#21262d" } },
+        y: { stacked: true, beginAtZero: true, ticks: { color: "#8b949e" }, grid: { color: "#21262d" } },
+      },
+    },
+  });
+}
 async function mlCatalogo() {
   $("#wcPanel").innerHTML = `<div class="loading">Cargando catálogo…</div>`;
   try {
@@ -311,7 +348,7 @@ async function mlProductos() {
   renderPager("ml-pager", d, (pg) => { state.ml.page = pg; mlProductos(); });
 }
 async function loadML() {
-  await Promise.allSettled([mlResumen(), mlDaily(), mlCapacidad(), mlCatalogo(), mlAprobacion(), mlErrores(), mlReady(), mlProductos()]);
+  await Promise.allSettled([mlResumen(), mlDaily(), mlHourly(), mlCapacidad(), mlCatalogo(), mlAprobacion(), mlErrores(), mlReady(), mlProductos()]);
 }
 
 // ===========================================================================
@@ -618,6 +655,10 @@ $$("[data-mldays]").forEach((b) => b.addEventListener("click", () => {
   state.ml.page = 1;
   mlDaily(); mlProductos();
 }));
+$("#mlHoraDia").addEventListener("change", (e) => {
+  state.ml.horaDia = e.target.value || null;
+  mlHourly();
+});
 $("#mlAplicar").addEventListener("click", () => {
   const desde = $("#mlDesde").value, hasta = $("#mlHasta").value;
   if (!desde || !hasta) { alert("Elige fecha desde y hasta"); return; }

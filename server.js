@@ -248,6 +248,69 @@ app.get("/api/daily", async (req, res) => {
   }
 });
 
+// --------------------------------------------------------------------------
+// Publicaciones por hora (en hora de México, UTC-6). El publisher corre cada hora.
+// --------------------------------------------------------------------------
+const MX_OFFSET = "INTERVAL 6 HOUR"; // el server guarda en UTC; MX = UTC-6
+app.get("/api/hourly", async (req, res) => {
+  try {
+    const f = cuentaWhere(req.query.cuenta);
+    // Día en hora MX (por defecto: el último día con actividad).
+    let dia = RE_FECHA.test(req.query.dia || "") ? req.query.dia : null;
+    if (!dia) {
+      const [r] = await q(
+        `SELECT DATE_FORMAT(MAX(created_at - ${MX_OFFSET}), '%Y-%m-%d') d FROM ml_backlog`
+      );
+      dia = r.d;
+    }
+    const rows = await q(
+      `SELECT HOUR(created_at - ${MX_OFFSET}) h, COUNT(*) total,
+              SUM(success=1) ok, SUM(success=0) err,
+              SUM(success=1 AND cuenta='BEKURA') bekura,
+              SUM(success=1 AND cuenta='SANCORFASHION') sancor,
+              COUNT(DISTINCT CASE WHEN success=1 THEN sku END) skus
+       FROM ml_backlog
+       WHERE DATE(created_at - ${MX_OFFSET}) = ? ${f.sql}
+       GROUP BY h ORDER BY h`,
+      [dia, ...f.params]
+    );
+    const map = new Map(rows.map((r) => [Number(r.h), r]));
+    const horas = [];
+    for (let h = 0; h < 24; h++) {
+      const r = map.get(h);
+      horas.push({
+        hora: h,
+        total: r ? Number(r.total) : 0,
+        ok: r ? Number(r.ok) : 0,
+        err: r ? Number(r.err) : 0,
+        bekura: r ? Number(r.bekura) : 0,
+        sancor: r ? Number(r.sancor) : 0,
+        skus: r ? Number(r.skus) : 0,
+      });
+    }
+    const [resu] = await q(
+      `SELECT SUM(success=1) ok, COUNT(DISTINCT CASE WHEN success=1 THEN sku END) skus,
+              COUNT(DISTINCT HOUR(created_at - ${MX_OFFSET})) horas_activas
+       FROM ml_backlog WHERE DATE(created_at - ${MX_OFFSET}) = ? ${f.sql}`,
+      [dia, ...f.params]
+    );
+    const ok = Number(resu.ok) || 0;
+    const horasAct = Number(resu.horas_activas) || 0;
+    res.json({
+      dia,
+      horas,
+      resumen: {
+        publicaciones: ok,
+        skus_unicos: Number(resu.skus) || 0,
+        horas_activas: horasAct,
+        promedio_hora: horasAct ? Math.round((ok / horasAct) * 10) / 10 : 0,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Suma/resta días a una fecha 'YYYY-MM-DD' usando UTC (sin desfase de zona horaria).
 function addDaysStr(yyyymmdd, delta) {
   const d = new Date(`${yyyymmdd}T00:00:00Z`);
